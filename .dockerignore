@@ -1,0 +1,14 @@
+.venv/
+.git/
+.github/
+.claude/
+.idea/
+.vscode/
+__pycache__/
+*.pyc
+.env
+data_cache/
+reports/
+reports_test/
+future.txt
+tests/

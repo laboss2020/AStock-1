@@ -1,0 +1,23 @@
+# docker compose run --rm picker   # 选股（一次性跑批，结果落盘 ./reports）
+# docker compose up web            # Web UI http://localhost:8501
+services:
+  picker:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./reports:/app/reports
+      - ./data_cache:/app/data_cache
+
+  web:
+    build: .
+    command: python -m streamlit run web/app.py --server.port 8501 --server.address 0.0.0.0
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./reports:/app/reports
+      - ./data_cache:/app/data_cache
