@@ -85,6 +85,10 @@ class Config:
     output_dir: str = "reports"  # per-run reports root
     debug: bool = False  # verbose logging
 
+    # --- Review / strategy versioning ---
+    review: bool = True  # 复盘上一次 run 并生成新策略版本（每次选股之后）
+    strategy_version: int = 0  # 0 = 用最新策略版本（无则默认策略）；N = 指定版本
+
     def resolved_base_url(self) -> str:
         return (
             self.base_url
@@ -144,6 +148,8 @@ def load_config(**overrides: Any) -> Config:
         "ASTOCK_OUTPUT_DIR": ("output_dir", str),
         "ASTOCK_LLM_TRUST_ENV": ("llm_trust_env", lambda v: v.strip() in ("1", "true", "yes", "True")),
         "ASTOCK_LLM_TIMEOUT": ("llm_timeout", int),
+        "ASTOCK_REVIEW": ("review", lambda v: v.strip() in ("1", "true", "yes", "True")),
+        "ASTOCK_STRATEGY_VERSION": ("strategy_version", int),
     }
     for var, (name, cast) in env_map.items():
         raw = os.environ.get(var, "")

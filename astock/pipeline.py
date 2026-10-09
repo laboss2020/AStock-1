@@ -34,6 +34,7 @@ from .data import (
 from .llm import LLMClient, LLMError
 from .pricing import PricePlan, _rule_fallback, compute_anchors, suggest_prices
 from .screen import RegimeWeights, apply_hard_filters, score_universe, weights_for_regime
+from .strategy import apply_multipliers, load_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,8 @@ class RunResult:
     screened_out: list[dict] = field(default_factory=list)  # 候选池 top（未进终选）
     llm_calls: int = 0
     errors: list[str] = field(default_factory=list)
+    strategy_version_used: int = 0   # 本次 run 使用的策略版本（0 = 默认策略）
+    review: dict = field(default_factory=dict)  # 选股后的复盘结果（见 review.py）
 
 
 def _llm_call_counting(llm: LLMClient, result: RunResult) -> LLMClient:
@@ -81,16 +84,29 @@ def run_pipeline(cfg: Config, llm: LLMClient) -> RunResult:
     """Execute the full five-stage flow. Raises LLMError on fatal LLM
     failures (Stage 1 cannot proceed without LLM); downstream per-stock
     failures are caught and recorded in result.errors so one bad stock
-    doesn't kill the batch."""
+    doesn't kill the batch.
+
+    策略版本：默认加载最新版（strategies/ 目录，复盘生成）；cfg.strategy_version
+    指定具体版本。版本带各阶段提示词校准块与因子权重乘数。"""
     result = RunResult(trade_date=datetime.now().strftime("%Y-%m-%d"))
     _llm_call_counting(llm, result)
+
+    # ---- 策略版本加载 -----------------------------------------------------
+    sv = load_strategy(cfg.strategy_version)
+    result.strategy_version_used = sv.version if sv else 0
+    if sv:
+        logger.info("策略版本: v%d（%s 生成，based_on=%s）", sv.version, sv.created, sv.based_on)
+        logger.info("复盘校准: %s", sv.review_summary[:100])
+    blocks = sv.prompt_blocks() if sv else {}
 
     # ---- Stage 1: 大盘体检 ---------------------------------------------
     logger.info("=== Stage 1: 大盘体检 ===")
     snapshot = _collect_market_snapshot(result)
-    regime = analyze_market(cfg, llm, snapshot)
+    regime = analyze_market(cfg, llm, snapshot, strategy_text=blocks.get("regime", ""))
     result.regime = regime
     weights: RegimeWeights = weights_for_regime(regime.regime)
+    if sv:
+        weights = apply_multipliers(weights, sv.factor_multipliers)
 
     # ---- Stage 2: 量化初筛 ---------------------------------------------
     logger.info("=== Stage 2: 量化初筛 ===")
@@ -121,7 +137,8 @@ def run_pipeline(cfg: Config, llm: LLMClient) -> RunResult:
 
     # ---- Stage 3: LLM 快筛 ----------------------------------------------
     logger.info("=== Stage 3: LLM 快筛 (%d 只) ===", len(candidates))
-    triaged = _triage_all(cfg, llm, regime, candidates, result)
+    triaged = _triage_all(cfg, llm, regime, candidates, result,
+                          strategy_text=blocks.get("triage", ""))
 
     triage_ranked = sorted(
         triaged, key=lambda t: (t.get("_triage_score", 0), t.get("score", 0.0)),
@@ -139,7 +156,8 @@ def run_pipeline(cfg: Config, llm: LLMClient) -> RunResult:
         code, name = cand["code"], cand["name"]
         try:
             bundle = _build_bundle(code, name, cand, hot_codes)
-            verdict = deep_analyze(cfg, llm, regime, bundle)
+            verdict = deep_analyze(cfg, llm, regime, bundle,
+                                   strategy_text=blocks.get("deep", ""))
             verdicts.append((cand, verdict))
         except LLMError:
             raise  # fatal: auth/quota — abort the run
@@ -157,7 +175,8 @@ def run_pipeline(cfg: Config, llm: LLMClient) -> RunResult:
         code, name = cand["code"], cand["name"]
         try:
             df = get_kline(code, days=120)
-            plan = suggest_prices(cfg, llm, {"code": code, "name": name}, verdict, df)
+            plan = suggest_prices(cfg, llm, {"code": code, "name": name}, verdict, df,
+                                  strategy_text=blocks.get("pricing", ""))
         except LLMError as e:
             # 一只股票的定价 LLM 失败不应报废整个 run（Stage 1-4 的工作都在
             # 它身后）——规则兜底出价并记录，继续下一只。df 在 try 里已绑定
@@ -268,7 +287,7 @@ def _merge_kline_momentum(pre_scored, limit: int):
     return pd.DataFrame(frames)
 
 
-def _triage_all(cfg, llm, regime, candidates, result) -> list[dict]:
+def _triage_all(cfg, llm, regime, candidates, result, strategy_text: str = "") -> list[dict]:
     """Triage in batches of 8; merge scores; keep candidates the model
     scored. Unscored candidates are rejected (logged, never promoted)."""
     out: list[dict] = []
@@ -278,7 +297,7 @@ def _triage_all(cfg, llm, regime, candidates, result) -> list[dict]:
         batch = rows[i : i + batch_size]
         compact = [_compact_candidate(r) for r in batch]
         try:
-            scores = triage_batch(cfg, llm, regime, compact)
+            scores = triage_batch(cfg, llm, regime, compact, strategy_text=strategy_text)
         except LLMError:
             raise
         except Exception as e:

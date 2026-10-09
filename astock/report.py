@@ -57,6 +57,7 @@ def render_report(result: RunResult) -> str:
         f"- LLM 快筛通过：**{result.triaged_count}** 只（放弃 {result.rejected_count} 只）",
         f"- 深度分析 + 定价 → **最终选股 {len(result.picks)}** 支",
         f"- LLM 调用次数：{result.llm_calls}",
+        f"- 策略版本：{'v' + str(result.strategy_version_used) if result.strategy_version_used else '默认（无复盘版本）'}",
         "",
     ]
 
@@ -98,10 +99,51 @@ def render_report(result: RunResult) -> str:
             )
         parts.append("")
 
+    # --- 复盘（选股之后，复盘上一次 run → 新策略版本）--------------------
+    if result.review:
+        rv = result.review
+        parts += ["## 五、复盘（上一次 run）", ""]
+        parts.append(f"- **复盘对象**：{rv.get('based_on', '（无）')}")
+        parts.append(f"- **新策略版本**：v{rv.get('new_version', '?')}（下次运行默认使用）")
+        if rv.get("summary"):
+            parts.append(f"- **复盘结论**：{rv['summary']}")
+        for n in rv.get("notes", []):
+            parts.append(f"- 改进点：{n}")
+
+        rows = rv.get("rows") or []
+        if rows:
+            # 股价前后对比表（当时收盘 vs 现价 vs 当时挂的价位）
+            parts += ["", "### 复盘明细：上一次选股的前后对比", ""]
+            parts += [
+                "| 代码 | 名称 | 当时收盘 | 现价 | 累计涨跌 | 当时买入区间 | 当时止损 | 当时卖出目标 | 当前状态 |",
+                "|---|---|---|---|---|---|---|---|---|",
+            ]
+            for r in rows:
+                chg = r.get("累计涨跌%")
+                parts.append(
+                    f"| {r.get('code','')} | {r.get('name','')} "
+                    f"| {r.get('当时收盘价') or '-'} | {r.get('当前价') or '-'} "
+                    f"| {'+' + str(chg) if isinstance(chg, (int, float)) and chg > 0 else (chg if chg is not None else '-')}% "
+                    f"| {r.get('当时买入区间')} | {r.get('当时止损')} | {r.get('当时卖出目标')} "
+                    f"| {r.get('当前表现')} |"
+                )
+            # 逐只：当时选股原因 + 价格变化原因
+            parts += ["", "### 逐只复盘：当时选股原因与价格变化原因", ""]
+            for r in rows:
+                parts.append(
+                    f"- **{r.get('code','')} {r.get('name','')}**（{r.get('当时结论','')}，"
+                    f"{r.get('当时评分','')} 分）"
+                )
+                parts.append(f"  - 当时选股原因：{r.get('当时选股原因') or '（无）'}")
+                parts.append(f"  - 价格变化原因：{r.get('变化原因') or '（未给出）'}")
+            parts.append("")
+    elif result.strategy_version_used == 0:
+        parts += ["## 五、复盘", "", "- 无上一次 run（首次运行），未生成策略版本。", ""]
+
     # --- 错误与缺失 ---
     if result.errors:
         parts += [
-            "## 五、本次运行的错误与缺失",
+            "## 六、本次运行的错误与缺失",
             "",
         ]
         for e in result.errors:

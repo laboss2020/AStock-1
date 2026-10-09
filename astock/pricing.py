@@ -119,7 +119,7 @@ def _validate(plan: PricePlan, anchors: dict) -> bool:
 
 
 def suggest_prices(cfg: Config, llm: LLMClient, bundle: dict,
-                   verdict, df) -> PricePlan:
+                   verdict, df, strategy_text: str = "") -> PricePlan:
     """Stage 5: one price plan per final pick."""
     anchors = compute_anchors(df)
     if not anchors:
@@ -131,6 +131,7 @@ def suggest_prices(cfg: Config, llm: LLMClient, bundle: dict,
         f"你是一位 A 股交易定价分析师。基于深度分析结论和技术锚点，为 {code} {name} "
         "给出建议的买入价格区间、止损价和卖出目标区间。\n\n"
         + ASTOCK_RULES
+        + (f"\n\n{strategy_text}" if strategy_text else "")
         + "\n\n定价纪律：\n"
         "1. **锚定技术位**：买入区间应落在支撑位附近（MA20/布林下轨/近期低点的聚类区域）；"
         "突破买入策略的买入区间可略高于现价，但不得超过现价的 115%\n"

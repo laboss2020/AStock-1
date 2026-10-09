@@ -58,12 +58,17 @@ class MarketRegime:
     raw: str = ""
 
 
-def analyze_market(cfg: Config, llm: LLMClient, snapshot: dict) -> MarketRegime:
-    """Stage 1: judge the market environment from index/flow/board/news data."""
+def analyze_market(cfg: Config, llm: LLMClient, snapshot: dict,
+                   strategy_text: str = "") -> MarketRegime:
+    """Stage 1: judge the market environment from index/flow/board/news data.
+
+    ``strategy_text`` (from the loaded strategy version) carries the review
+    calibration for this stage — empty when running the default strategy."""
     system = (
         "你是一位资深的大盘策略分析师，负责在个股分析之前判断 A 股整体市场环境。"
         "你的判断决定后续选股的进攻/防守取向。\n\n"
         + ASTOCK_RULES
+        + (f"\n\n{strategy_text}" if strategy_text else "")
         + "\n\n分析框架：\n"
         "1. **指数趋势**：主要指数（上证/深成/创业板/科创50）的近期走势、均线位置，判断趋势方向\n"
         "2. **市场宽度**：上涨/下跌家数比，判断赚钱效应\n"
@@ -133,7 +138,7 @@ def analyze_market(cfg: Config, llm: LLMClient, snapshot: dict) -> MarketRegime:
 
 
 def triage_batch(cfg: Config, llm: LLMClient, regime: MarketRegime,
-                 candidates: list[dict]) -> dict[str, dict]:
+                 candidates: list[dict], strategy_text: str = "") -> dict[str, dict]:
     """Score a batch of candidates (0-100) with one-line reasons.
 
     Returns {code: {score, reason}} — missing codes mean the model skipped
@@ -143,6 +148,7 @@ def triage_batch(cfg: Config, llm: LLMClient, regime: MarketRegime,
         "你是一位 A 股选股助手，负责从量化初筛出的候选池中快速评审每只股票的买入价值。"
         "依据当日大盘环境和候选股票的数据快照打分（0-100）。\n\n"
         + ASTOCK_RULES
+        + (f"\n\n{strategy_text}" if strategy_text else "")
         + "\n\n评分标准：\n"
         "- 70-100：多因素共振（趋势/资金/题材/估值），值得深度分析\n"
         "- 40-69：部分因素成立，可关注\n"
@@ -201,7 +207,7 @@ class DeepVerdict:
 
 
 def deep_analyze(cfg: Config, llm: LLMClient, regime: MarketRegime,
-                 bundle: dict) -> DeepVerdict:
+                 bundle: dict, strategy_text: str = "") -> DeepVerdict:
     """Stage 4: comprehensive analysis of one candidate from its data bundle.
 
     The bundle carries compact but complete per-dimension evidence (技术面
@@ -214,6 +220,7 @@ def deep_analyze(cfg: Config, llm: LLMClient, regime: MarketRegime,
         f"你是一位 A 股资深投研分析师。现在对候选股票 {code} {name} 做深度分析，"
         "判断其是否值得买入。你需要像投研团队一样从多个维度独立评估。\n\n"
         + ASTOCK_RULES
+        + (f"\n\n{strategy_text}" if strategy_text else "")
         + "\n\n分析维度（每个维度都必须给出明确评价，数据缺失时如实标注）：\n"
         "1. **技术面**：趋势方向（均线多空排列）、量价配合（放量/缩量）、关键支撑阻力、RSI/MACD 信号\n"
         "2. **基本面**：估值水平（对标同行业）、盈利质量、成长性；PE>70x 且无高增长支撑即为高估\n"

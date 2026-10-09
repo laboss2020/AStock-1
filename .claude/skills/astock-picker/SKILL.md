@@ -21,6 +21,12 @@ python main.py
 # 指定数量 / 输出目录 / 调试
 python main.py --max-picks 8 --output reports/ --debug
 
+# 策略版本：默认最新复盘版本；--strategy-version N 钉住特定版本
+python main.py --strategy-version 1
+
+# 跳过复盘（不生成新策略版本）
+python main.py --no-review
+
 # 换 provider（见 .env.example 的方案 B/C/D）
 python main.py -p deepseek
 ```
@@ -80,9 +86,18 @@ app 在没有 key 时会报错退出。此时可以：
 ## 输出格式
 
 `reports/<时间戳>/` 下：
-- **report.md**：大盘体检 → 筛选漏斗 → 最终选股表（代码/名称/评级/买入区间/止损/卖出区间/仓位/理由）→ 详情（5维评价+定价依据）→ 免责声明
-- **picks.json**：结构化选股结果（供程序消费）
+- **report.md**：大盘体检 → 筛选漏斗 → 最终选股表（代码/名称/评级/买入区间/止损/卖出区间/仓位/理由）→ 详情（5维评价+定价依据）→ 复盘（上一次 run）→ 免责声明
+- **picks.json**：结构化选股结果（供程序消费，也是下一次复盘的输入）
 - **run_meta.json**：运行参数、LLM 调用次数、数据源可用性快照
+
+## 策略演进（复盘驱动）
+
+每次选股完成后 app 自动复盘**上一次 run**：对比当时判断 vs 实际表现（已达目标=准，跌破止损=错，未入买入区间=入场偏早），1 次 LLM 调用落成新策略版本 `strategies/vN.json`。版本携带：
+
+- **各阶段提示词校准**（大盘体检校准/快筛评分补充/深度分析补充/定价纪律）——嵌入后续 run 的对应阶段提示词
+- **因子权重乘数**（momentum/volume_price/capital/heat/valuation，0.5~2.0，clamp 后归一化）——作用在 regime 基底权重上
+
+下次运行默认加载最新版本；`--strategy-version N` 可钉住旧版本回滚对比。首次运行（无上一次 run）跳过复盘。人工复盘时（Claude 宿主场景）：读上一次 run 的 picks.json 与当前行情，按同样的结构（review_summary/regime_calibration/triage_criteria/deep_focus/pricing_discipline/factor_multipliers/notes）手写 `strategies/vN.json` 即可被 app 加载。
 
 ## 风险提示
 

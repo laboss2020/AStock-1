@@ -11,6 +11,7 @@
 - **LLM 快筛**（Stage 3）：批量打分 0-100 + 一句话理由
 - **深度分析**（Stage 4）：5 维度评价（基本面/技术面/资金面/消息面/风险）→ 值得买入/可关注/放弃
 - **买卖定价**（Stage 5）：技术锚点（MA/BOLL/ATR/高低点）+ LLM 定价 + 硬校验 + 规则兜底，输出买入区间、止损、两档卖出价、仓位建议
+- **复盘与策略版本**（每次选股后）：对比上一次 run 的判断与这些股票的当前实际表现（已达目标/跌破止损/回落买入区间…），LLM 复盘总结得失并输出结构化策略改进 → `strategies/vN.json`；下次运行**默认使用最新版本**，也可 `--strategy-version N` 指定
 - **报告落盘**：`reports/YYYY-MM-DD_HHMMSS/` 下 report.md + picks.json + run_meta.json
 
 A股规则（T+1、涨跌停、PE 框架、政策市、量在价先、减持新规、散户情绪）内嵌于所有 LLM 提示词与定价校验。
@@ -51,12 +52,41 @@ python main.py -p deepseek -m deepseek-chat
 
 ```
 python main.py [--provider/-p NAME] [--model/-m NAME] [--base-url URL]
-               [--max-picks N] [--candidates N] [--output/-o DIR] [--debug]
+               [--max-picks N] [--candidates N] [--output/-o DIR]
+               [--strategy-version N] [--no-review] [--debug]
 ```
 
 - `--max-picks 8`：最终选股数量上限（默认 10）
 - `--candidates 40`：LLM 快筛候选数（默认 30）
+- `--strategy-version 1`：指定策略版本（默认最新复盘版本；无版本时用内置默认策略）
+- `--no-review`：跳过选股后的复盘（不生成新策略版本）
 - `--debug`：输出数据层 WARNING 日志（东财封禁/fallback 触发可见）
+
+## 复盘与策略版本
+
+每次选股完成后自动复盘**上一次 run**：读取其 `picks.json`，拉取这些股票的当前行情，逐只判定实际表现（已进入卖出目标区间 / 已跌破止损位 / 处于建议买入区间内 / 回落至买入区间下方 / 高于买入区间上沿 / `[数据缺失]`），然后 1 次 LLM 调用把对比结论落成**新策略版本**：
+
+```
+strategies/
+├── v1.json   # 第 2 次 run 复盘第 1 次 run 生成
+├── v2.json   # 第 3 次 run 复盘第 2 次 run 生成
+└── ...
+```
+
+版本内容（由 LLM 输出、代码校验后落盘）：
+
+- **复盘结论** `review_summary`：上次选股实际表现、判断准确度、共性问题
+- **各阶段提示词校准**：大盘体检校准 / 快筛评分补充 / 深度分析补充 / 定价纪律——嵌入后续 run 的对应阶段提示词
+- **因子权重乘数** `factor_multipliers`：momentum/volume_price/capital/heat/valuation 各 0.5~2.0，作用在 regime 基底权重上（clamp 后归一化 sum=1）
+- **改进点** `notes`：人可读的改进记录
+
+版本控制：
+
+- 下次运行**默认加载最新版本**（`--strategy-version` 缺省即最新）
+- `--strategy-version 2` / `ASTOCK_STRATEGY_VERSION=2`：钉住特定版本（可回滚对比）
+- 首次运行（无上一次 run）跳过复盘，不生成版本；版本文件损坏时自动回退默认策略
+- `ASTOCK_REVIEW=0` / `--no-review`：关闭复盘
+- 建议把 `strategies/` 提交进 git，跟踪策略演进
 
 ## Web UI（可选）
 
@@ -83,16 +113,17 @@ ASTOCK_CACHE_DIR=/path/to/cache python main.py   # 自定义缓存目录
 前置一步：仓库 **Settings → Secrets and variables → Actions** 添加 `NVIDIA_API_KEY`（免费 key 申请：[build.nvidia.com](https://build.nvidia.com)）。
 
 - 手动触发：Actions 页 → A股选股定时运行 → **Run workflow**
-- K 线缓存跨 run 增量累积（actions/cache，昨天为止的缓存 → 今天只拉增量）
+- K 线缓存跨 run 增量累积（actions/cache，昨天为止的缓存 → 今天只拉增量），复盘生成的策略版本随缓存一并累积
 - 注：GitHub 定时任务在整点常有几分钟排队延迟，实际开始时间可能略晚于 14:00
 
 ## Docker
 
 ```bash
-# 选股（一次性跑批，结果落盘宿主 ./reports/，缓存复用宿主 ./data_cache/）
+# 选股（一次性跑批，结果落盘宿主 ./reports/，缓存与策略版本复用宿主目录）
 docker build -t astock .
 docker run --rm --env-file .env \
-  -v ./reports:/app/reports -v ./data_cache:/app/data_cache astock
+  -v ./reports:/app/reports -v ./data_cache:/app/data_cache \
+  -v ./strategies:/app/strategies astock
 
 # Web UI（http://localhost:8501）
 docker run --rm --env-file .env -p 8501:8501 \
@@ -132,8 +163,11 @@ astock/
 ├── analysis.py      # Stage 1 大盘体检 + Stage 3 快筛 + Stage 4 深度分析提示词
 ├── pricing.py       # Stage 5 定价（锚点 + 校验 + 规则兜底）
 ├── pipeline.py      # 五阶段编排
+├── strategy.py      # 策略版本管理（复盘生成 vN.json + 加载/乘数）
+├── review.py        # 复盘：上次 run 判断 vs 实际表现 → 新策略版本
 ├── report.py        # Markdown/JSON 报告
 └── cli.py           # typer CLI
+strategies/          # 策略版本（复盘自动生成，v1.json v2.json …）
 .claude/skills/astock-picker/SKILL.md   # 大盘选股策略 skill（Claude Code 用）
 web/app.py          # Streamlit UI
 .github/workflows/run-picker.yml   # 工作日 14:00 北京时间定时运行
