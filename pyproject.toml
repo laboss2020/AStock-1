@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "astock"
+version = "0.1.0"
+description = "A股大盘选股 App — 大盘体检 + 五阶段筛选 + AI 买卖定价"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "AStock" }]
+dependencies = [
+    "requests>=2.31",
+    "pandas>=2.0",
+    "stockstats>=0.6",
+    "openai>=1.40",
+    "python-dotenv>=1.0",
+    "rich>=13.0",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+web = ["streamlit>=1.36"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+astock = "astock.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["astock*"]

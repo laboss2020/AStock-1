@@ -1,0 +1,60 @@
+name: A股选股定时运行
+
+# 每个工作日 14:00 北京时间（= 06:00 UTC）自动执行；Run workflow 按钮手动触发。
+# 注：GitHub 定时任务在整点常有几分钟到十几分钟的排队延迟。
+# 前置：仓库 Settings → Secrets and variables → Actions 添加 NVIDIA_API_KEY
+#（免费 key 申请：https://build.nvidia.com）。
+
+on:
+  schedule:
+    - cron: "0 6 * * 1-5"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  pick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # K线/清单磁盘缓存 + 复盘策略版本：restore-keys 恢复最近一次 run 的缓存，
+      # 本次只拉增量，跑完写回新 key（跨 run 增量累积；策略版本随之演进）
+      - uses: actions/cache@v4
+        with:
+          path: |
+            data_cache
+            strategies
+          key: astock-cache-${{ github.run_id }}
+          restore-keys: |
+            astock-cache-
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: pip install .
+
+      - name: 运行选股
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          ASTOCK_PROVIDER: nim
+          ASTOCK_MODEL: nvidia/nemotron-3-super-120b-a12b
+          PYTHONIOENCODING: utf-8
+          PYTHONUNBUFFERED: "1"
+        run: python main.py
+
+      - name: 完整报告输出到日志
+        run: cat "reports/$(ls -t reports | head -1)/report.md"
+
+      - name: 上传报告与策略版本 artifact（保留 30 天）
+        uses: actions/upload-artifact@v4
+        with:
+          name: astock-report-${{ github.run_id }}
+          path: |
+            reports/
+            strategies/
+          retention-days: 30

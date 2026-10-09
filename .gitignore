@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# 环境变量（含 API key，勿提交；模板是 .env.example）
+.env
+
+# 运行产物与缓存（可重建；GitHub Actions 用 actions/cache 跨 run 保留）
+data_cache/
+reports/
+reports_test/
+
+# 本地 IDE / 会话配置
+.idea/
+.vscode/
+.claude/settings.local.json
