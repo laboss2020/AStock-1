@@ -15,3 +15,10 @@ reports_test/
 .idea/
 .vscode/
 .claude/settings.local.json
+
+# 构建产物（pip install . 在源码目录生成）
+build/
+*.egg-info/
+
+# 桌面杂项
+Desktop.ini

@@ -36,7 +36,11 @@ jobs:
           python-version: "3.12"
 
       - name: 安装依赖
-        run: pip install .
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          pip check
+          python -c "import httpx, urllib3, openai; import astock.cli; import astock.review; print('依赖与导入 OK')"
 
       - name: 运行选股
         env:

@@ -12,6 +12,8 @@ license = { text = "Apache-2.0" }
 authors = [{ name = "AStock" }]
 dependencies = [
     "requests>=2.31",
+    "urllib3>=2.0",
+    "httpx>=0.24",
     "pandas>=2.0",
     "stockstats>=0.6",
     "openai>=1.40",
