@@ -1,13 +1,15 @@
 name: A股选股定时运行
 
-# 每个工作日 14:00 北京时间（= 06:00 UTC）自动执行；Run workflow 按钮手动触发。
-# 注：GitHub 定时任务在整点常有几分钟到十几分钟的排队延迟。
+# 每个工作日 14:07 北京时间（cron 7 6 * * 1-5 = 06:07 UTC）自动执行；
+# Run workflow 按钮手动触发。
+# 注：刻意错开整点——GitHub 定时调度在整点高负载时常延迟十几分钟甚至
+# 整轮跳过（2026-10-12 周一 14:00 实测被跳过），错峰后可靠性显著提高。
 # 前置：仓库 Settings → Secrets and variables → Actions 添加 NVIDIA_API_KEY
 #（免费 key 申请：https://build.nvidia.com）。
 
 on:
   schedule:
-    - cron: "0 6 * * 1-5"
+    - cron: "7 6 * * 1-5"
   workflow_dispatch: {}
 
 permissions:

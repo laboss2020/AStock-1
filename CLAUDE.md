@@ -44,7 +44,7 @@ PYTHONIOENCODING=utf-8 PYTHONPATH=. .venv/Scripts/python tests/test_review.py
 
 ## 定时运行 / Docker
 
-- `.github/workflows/run-picker.yml`：每工作日 14:00 北京时间（cron `0 6 * * 1-5`），报告打日志 + artifact；需 repo secret `NVIDIA_API_KEY`
+- `.github/workflows/run-picker.yml`：每工作日 14:07 北京时间（cron `7 6 * * 1-5`，刻意错开整点——GitHub 整点调度高负载时常跳过，2026-10-12 周一 14:00 实测被跳过），报告打日志 + artifact；需 repo secret `NVIDIA_API_KEY`
 - `Dockerfile`（python:3.12-slim，`pip install .[web]`）+ `docker-compose.yml`（picker 跑批 / web UI 8501）+ `.dockerignore`
 - 无 `.env` 时纯环境变量可用（env_map）；workflow 显式设 `ASTOCK_MODEL=nvidia/nemotron-3-super-120b-a12b`
 

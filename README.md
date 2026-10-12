@@ -108,13 +108,13 @@ ASTOCK_CACHE_DIR=/path/to/cache python main.py   # 自定义缓存目录
 
 ## GitHub Actions 定时运行
 
-`.github/workflows/run-picker.yml`：**每个工作日 14:00（北京时间）** 自动执行，结果在 workflow 运行日志中查看（完整报告也会打印到日志），并上传 `astock-report-*` artifact（保留 30 天）。
+`.github/workflows/run-picker.yml`：**每个工作日 14:07（北京时间，cron 刻意错开整点）** 自动执行，结果在 workflow 运行日志中查看（完整报告也会打印到日志），并上传 `astock-report-*` artifact（保留 30 天）。
 
 前置一步：仓库 **Settings → Secrets and variables → Actions** 添加 `NVIDIA_API_KEY`（免费 key 申请：[build.nvidia.com](https://build.nvidia.com)）。
 
 - 手动触发：Actions 页 → A股选股定时运行 → **Run workflow**
 - K 线缓存跨 run 增量累积（actions/cache，昨天为止的缓存 → 今天只拉增量），复盘生成的策略版本随缓存一并累积
-- 注：GitHub 定时任务在整点常有几分钟排队延迟，实际开始时间可能略晚于 14:00
+- 注：GitHub 定时任务不保证精确到分（高负载时延迟或偶发跳过），cron 刻意错开整点（14:07）以提高触发可靠性
 
 ## Docker
 
