@@ -44,7 +44,7 @@ PYTHONIOENCODING=utf-8 PYTHONPATH=. .venv/Scripts/python tests/test_review.py
 
 ## 定时运行 / Docker
 
-- `.github/workflows/run-picker.yml`：每工作日 14:07 北京时间（cron `7 6 * * 1-5`，刻意错开整点——GitHub 整点调度高负载时常跳过，2026-10-12 周一 14:00 实测被跳过），报告打日志 + artifact；需 repo secret `NVIDIA_API_KEY`
+- `.github/workflows/run-picker.yml`：每工作日 **14:07 + 14:37 双 cron**（`7,37 6 * * 1-5`）互为兜底——GitHub schedule 高负载时整轮丢弃（2026-10-12/13 连续两天实测无 schedule run，平台状态正常）；当日 gate 去重（`.run_gate` 文件走 cache 跨 run 传递，第一个成功 run 写入，当天第二个触发秒退不装环境；手动 workflow_dispatch 忽略 gate 强制跑；第一个失败不写 gate，第二个自动重试）。报告打日志 + artifact；需 repo secret `NVIDIA_API_KEY`
 - `Dockerfile`（python:3.12-slim，`pip install .[web]`）+ `docker-compose.yml`（picker 跑批 / web UI 8501）+ `.dockerignore`
 - 无 `.env` 时纯环境变量可用（env_map）；workflow 显式设 `ASTOCK_MODEL=nvidia/nemotron-3-super-120b-a12b`
 

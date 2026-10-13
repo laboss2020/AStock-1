@@ -1,15 +1,19 @@
 name: A股选股定时运行
 
-# 每个工作日 14:07 北京时间（cron 7 6 * * 1-5 = 06:07 UTC）自动执行；
-# Run workflow 按钮手动触发。
-# 注：刻意错开整点——GitHub 定时调度在整点高负载时常延迟十几分钟甚至
-# 整轮跳过（2026-10-12 周一 14:00 实测被跳过），错峰后可靠性显著提高。
+# 每个工作日 14:07 / 14:37（北京时间，cron 7,37 6 * * 1-5 = 06:07/06:37 UTC）
+# 两次定时触发，互为兜底；Run workflow 按钮手动触发（手动触发忽略当日 gate，
+# 总是真跑）。
+# 注：GitHub 定时调度在高负载时常延迟甚至**整轮丢弃**（2026-10-12 周一 14:00
+# 与 2026-10-13 周二 14:07 均实测无 schedule run，平台状态却正常）——单 cron
+# 不可靠，因此配两个触发点 + 当日 gate 去重：第一个成功的 run 写 gate 标记，
+# 第二个触发时发现已跑直接跳过（不装环境秒退）；若第一个失败，第二个自动重试。
 # 前置：仓库 Settings → Secrets and variables → Actions 添加 NVIDIA_API_KEY
 #（免费 key 申请：https://build.nvidia.com）。
 
 on:
   schedule:
     - cron: "7 6 * * 1-5"
+    - cron: "37 6 * * 1-5"
   workflow_dispatch: {}
 
 permissions:
@@ -22,9 +26,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ---- 当日 gate：读最近一次 run 写下的标记（cache 跨 run 传递）-------
+      - uses: actions/cache/restore@v4
+        id: gate
+        with:
+          path: .run_gate
+          key: run-gate-${{ github.run_id }}
+          restore-keys: |
+            run-gate-
+
+      - name: 当日已跑则跳过（秒退，不装环境）
+        id: gate_check
+        run: |
+          TODAY=$(date +%F)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "手动触发，忽略当日 gate，强制运行"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif [ -f .run_gate ] && [ "$(cat .run_gate)" = "$TODAY" ]; then
+            echo "今天（$TODAY）已有成功的 run，跳过"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "今天（$TODAY）尚未运行，继续"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # K线/清单磁盘缓存 + 复盘策略版本：restore-keys 恢复最近一次 run 的缓存，
       # 本次只拉增量，跑完写回新 key（跨 run 增量累积；策略版本随之演进）
       - uses: actions/cache@v4
+        if: steps.gate_check.outputs.skip != 'true'
         with:
           path: |
             data_cache
@@ -34,10 +63,12 @@ jobs:
             astock-cache-
 
       - uses: actions/setup-python@v5
+        if: steps.gate_check.outputs.skip != 'true'
         with:
           python-version: "3.12"
 
       - name: 安装依赖
+        if: steps.gate_check.outputs.skip != 'true'
         run: |
           python -m pip install --upgrade pip
           pip install .
@@ -45,6 +76,7 @@ jobs:
           python -c "import httpx, urllib3, openai; import astock.cli; import astock.review; print('依赖与导入 OK')"
 
       - name: 运行选股
+        if: steps.gate_check.outputs.skip != 'true'
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           ASTOCK_PROVIDER: nim
@@ -54,9 +86,11 @@ jobs:
         run: python main.py
 
       - name: 完整报告输出到日志
+        if: steps.gate_check.outputs.skip != 'true'
         run: cat "reports/$(ls -t reports | head -1)/report.md"
 
       - name: 上传报告与策略版本 artifact（保留 30 天）
+        if: steps.gate_check.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: astock-report-${{ github.run_id }}
@@ -64,3 +98,14 @@ jobs:
             reports/
             strategies/
           retention-days: 30
+
+      # ---- 跑完才写 gate：前面任一步失败则不写，第二个 cron 触发时自动重试 --
+      - name: 写当日 gate 标记
+        if: steps.gate_check.outputs.skip != 'true'
+        run: date +%F > .run_gate
+
+      - uses: actions/cache/save@v4
+        if: steps.gate_check.outputs.skip != 'true'
+        with:
+          path: .run_gate
+          key: run-gate-${{ github.run_id }}
