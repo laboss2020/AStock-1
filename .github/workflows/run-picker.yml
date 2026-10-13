@@ -16,6 +16,14 @@ on:
     - cron: "37 6 * * 1-5"
   workflow_dispatch: {}
 
+# 并发控制：同一时间只跑一个（参照 daily_stock_analysis）。GitHub 定时延迟
+# 可达数小时（实测同账号另一项目 cron 10:00 实际在 08:05~21:01 间漂移触发），
+# 两个 cron 的 run 可能重叠——排队而非并发：先跑的完成后写 gate，排队的那个
+# 读到 gate 秒退，天然防双跑。
+concurrency:
+  group: stock-picker
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -66,6 +74,8 @@ jobs:
         if: steps.gate_check.outputs.skip != 'true'
         with:
           python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: pyproject.toml
 
       - name: 安装依赖
         if: steps.gate_check.outputs.skip != 'true'

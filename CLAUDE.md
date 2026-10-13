@@ -44,7 +44,7 @@ PYTHONIOENCODING=utf-8 PYTHONPATH=. .venv/Scripts/python tests/test_review.py
 
 ## 定时运行 / Docker
 
-- `.github/workflows/run-picker.yml`：每工作日 **14:07 + 14:37 双 cron**（`7,37 6 * * 1-5`）互为兜底——GitHub schedule 高负载时整轮丢弃（2026-10-12/13 连续两天实测无 schedule run，平台状态正常）；当日 gate 去重（`.run_gate` 文件走 cache 跨 run 传递，第一个成功 run 写入，当天第二个触发秒退不装环境；手动 workflow_dispatch 忽略 gate 强制跑；第一个失败不写 gate，第二个自动重试）。报告打日志 + artifact；需 repo secret `NVIDIA_API_KEY`
+- `.github/workflows/run-picker.yml`：每工作日 **14:07 + 14:37 双 cron**（`7,37 6 * * 1-5`）互为兜底——GitHub schedule 高负载时延迟甚至丢弃（同账号 daily_stock_analysis 实测 cron 10:00 实际在 08:05~21:01 间漂移触发，128 次成功：延迟可达数小时但最终会跑）；当日 gate 去重（`.run_gate` 文件走 cache 跨 run 传递，第一个成功 run 写入，当天第二个触发秒退不装环境；手动 workflow_dispatch 忽略 gate 强制跑；第一个失败不写 gate，第二个自动重试）；**concurrency 组 `stock-picker`**（排队不并发——延迟 run 重叠时先跑的写 gate、排队的秒退，防双跑）。报告打日志 + artifact；需 repo secret `NVIDIA_API_KEY`
 - `Dockerfile`（python:3.12-slim，`pip install .[web]`）+ `docker-compose.yml`（picker 跑批 / web UI 8501）+ `.dockerignore`
 - 无 `.env` 时纯环境变量可用（env_map）；workflow 显式设 `ASTOCK_MODEL=nvidia/nemotron-3-super-120b-a12b`
 
