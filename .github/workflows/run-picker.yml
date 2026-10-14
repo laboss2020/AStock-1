@@ -1,8 +1,14 @@
 name: A股选股定时运行
 
-# 每个工作日 14:07 / 14:37（北京时间，cron 7,37 6 * * 1-5 = 06:07/06:37 UTC）
-# 两次定时触发，互为兜底；Run workflow 按钮手动触发（手动触发忽略当日 gate，
-# 总是真跑）。
+# 定时触发（北京时间）：主触发 06:07 + 兜底 14:07/14:37，当日 gate 保证一天
+# 只真跑一次；Run workflow 按钮手动触发（手动忽略 gate，总是真跑）。
+#
+# 为什么主触发在清晨 06:07：GitHub 定时调度延迟严重且不可预测——本仓库实测
+# cron 06:07(UTC) 实际 21:58（北京）才触发（晚 ~7.5h）；同账号 daily_stock_
+# analysis 的 cron 18:00(北京) 实际在次日 04:05~次日 05:01+ 间漂移。把主触发
+# 提前到清晨 06:07，加上 ~几小时的调度延迟，报告通常在开盘前后到 14:00 之间
+# 落地；若 06:07 被调度器丢弃或延迟很短，14:07/14:37 兜底真跑（gate 拦住重复）。
+# 时区换算：北京周一~周五 06:07 = UTC 周日~周四 22:07（cron 星期为 0-4）。
 # 注：GitHub 定时调度在高负载时常延迟甚至**整轮丢弃**（2026-10-12 周一 14:00
 # 与 2026-10-13 周二 14:07 均实测无 schedule run，平台状态却正常）——单 cron
 # 不可靠，因此配两个触发点 + 当日 gate 去重：第一个成功的 run 写 gate 标记，
@@ -12,8 +18,9 @@ name: A股选股定时运行
 
 on:
   schedule:
-    - cron: "7 6 * * 1-5"
-    - cron: "37 6 * * 1-5"
+    - cron: "7 22 * * 0-4"   # 北京周一~周五 06:07（主触发，赌调度延迟 ~8h）
+    - cron: "7 6 * * 1-5"    # 北京 14:07（兜底）
+    - cron: "37 6 * * 1-5"   # 北京 14:37（兜底）
   workflow_dispatch: {}
 
 # 并发控制：同一时间只跑一个（参照 daily_stock_analysis）。GitHub 定时延迟
@@ -46,7 +53,8 @@ jobs:
       - name: 当日已跑则跳过（秒退，不装环境）
         id: gate_check
         run: |
-          TODAY=$(date +%F)
+          # 按北京时间判定"同一天"（主触发在 UTC 前一日的 22 点档）
+          TODAY=$(TZ='Asia/Shanghai' date +%F)
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "手动触发，忽略当日 gate，强制运行"
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -112,7 +120,7 @@ jobs:
       # ---- 跑完才写 gate：前面任一步失败则不写，第二个 cron 触发时自动重试 --
       - name: 写当日 gate 标记
         if: steps.gate_check.outputs.skip != 'true'
-        run: date +%F > .run_gate
+        run: TZ='Asia/Shanghai' date +%F > .run_gate
 
       - uses: actions/cache/save@v4
         if: steps.gate_check.outputs.skip != 'true'

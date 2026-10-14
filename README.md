@@ -108,7 +108,7 @@ ASTOCK_CACHE_DIR=/path/to/cache python main.py   # 自定义缓存目录
 
 ## GitHub Actions 定时运行
 
-`.github/workflows/run-picker.yml`：**每个工作日 14:07 与 14:37（北京时间）两次定时触发互为兜底**——GitHub 定时调度在高负载时会延迟甚至整轮丢弃（单 cron 不可靠），配当日去重标记：第一个成功的 run 落盘后，当天的第二次触发自动跳过；第一次失败则第二次自动重试。结果在 workflow 运行日志中查看（完整报告也会打印到日志），并上传 `astock-report-*` artifact（保留 30 天）。
+`.github/workflows/run-picker.yml`：**每个工作日三个定时触发**——主触发北京 06:07（GitHub 调度延迟通常数小时，报告一般在开盘前后到 14:00 之间落地）+ 兜底 14:07 / 14:37。GitHub 定时调度不精确（延迟可达数小时甚至整轮丢弃），三个触发点互为兜底；当日去重标记保证一天只真跑一次（第一个成功 run 落盘后，当天的后续触发秒退跳过）；第一次失败则后续触发自动重试。结果在 workflow 运行日志中查看（完整报告也会打印到日志），并上传 `astock-report-*` artifact（保留 30 天）。
 
 前置一步：仓库 **Settings → Secrets and variables → Actions** 添加 `NVIDIA_API_KEY`（免费 key 申请：[build.nvidia.com](https://build.nvidia.com)）。
 
