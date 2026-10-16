@@ -1,32 +1,42 @@
 name: A股选股定时运行
 
-# 定时触发（北京时间）：主触发 06:07 + 兜底 14:07/14:37，当日 gate 保证一天
-# 只真跑一次；Run workflow 按钮手动触发（手动忽略 gate，总是真跑）。
+# 定时触发（北京时间）：06:37 / 08:37 / 10:37 / 12:37 / 13:07 / 13:37 / 14:07
+# 七个触发点 + 「gate + 时间窗」检查。GitHub 定时调度延迟严重且不可预测——
+# 本仓库实测：计划 06:07 实际 08:26 触发（+2.3h）；计划 14:07 实际 19:35/21:58
+# 触发（+5.5~8h）；甚至整天丢弃（10-12、10-13 两天无任何 schedule run）。
+# 单靠猜 cron 永远定不准，所以让 workflow 自己吸收延迟，每个触发先做检查：
 #
-# 为什么主触发在清晨 06:07：GitHub 定时调度延迟严重且不可预测——本仓库实测
-# cron 06:07(UTC) 实际 21:58（北京）才触发（晚 ~7.5h）；同账号 daily_stock_
-# analysis 的 cron 18:00(北京) 实际在次日 04:05~次日 05:01+ 间漂移。把主触发
-# 提前到清晨 06:07，加上 ~几小时的调度延迟，报告通常在开盘前后到 14:00 之间
-# 落地；若 06:07 被调度器丢弃或延迟很短，14:07/14:37 兜底真跑（gate 拦住重复）。
-# 时区换算：北京周一~周五 06:07 = UTC 周日~周四 22:07（cron 星期为 0-4）。
-# 注：GitHub 定时调度在高负载时常延迟甚至**整轮丢弃**（2026-10-12 周一 14:00
-# 与 2026-10-13 周二 14:07 均实测无 schedule run，平台状态却正常）——单 cron
-# 不可靠，因此配两个触发点 + 当日 gate 去重：第一个成功的 run 写 gate 标记，
-# 第二个触发时发现已跑直接跳过（不装环境秒退）；若第一个失败，第二个自动重试。
-# 前置：仓库 Settings → Secrets and variables → Actions 添加 NVIDIA_API_KEY
-#（免费 key 申请：https://build.nvidia.com）。
+#   - 当天已成功跑过（gate 标记）→ 秒退，不装环境；
+#   - 距北京时间 13:10 超过 3 小时 → 本轮太早，直接跳过（纯调度冗余）；
+#   - 距 13:10 不足 3 小时 → 睡到 13:10 开跑（吸收调度延迟）；
+#   - 已过 13:10 → 立即开跑。
+#
+# 效果：调度延迟 0~7h 的触发都落在 10:10~13:41 窗口内 → 选股 13:10~13:41
+# 开跑（job 全程约 20 分钟），**14:00 前完成**；延迟 >7h 的极端天，第一个
+# 到达的触发立即跑（傍晚出结果，不空缺）。各触发点的分工：
+#   06:37 → 吸收 5~7h 延迟；08:37 → 吸收 3~5h；10:37 → 吸收 1~3h；
+#   12:37 → 吸收 ~1h；13:07/13:37 → 准点到达即命中窗口（~13:30/~13:57 完成）；
+#   14:07 → 全天触发都被丢弃时的最后保险（~14:30 完成）。
+# 第一个成功的 run 写 gate 标记，当天后续触发秒退；失败的 run 不写 gate，
+# 后续触发自动重试。手动 Run workflow 忽略 gate 与时间窗，总是真跑。
+#
+# 时区换算：北京 06:37 = UTC 前日 22:37（cron 星期为 0-4）；其余为 UTC 同日
+# 1-5。前置：仓库 Settings → Secrets and variables → Actions 添加
+# NVIDIA_API_KEY（免费 key 申请：https://build.nvidia.com）。
 
 on:
   schedule:
-    - cron: "7 22 * * 0-4"   # 北京周一~周五 06:07（主触发，赌调度延迟 ~8h）
-    - cron: "7 6 * * 1-5"    # 北京 14:07（兜底）
-    - cron: "37 6 * * 1-5"   # 北京 14:37（兜底）
+    - cron: "37 22 * * 0-4"  # 北京 06:37（吸收 5~7h 调度延迟）
+    - cron: "37 0 * * 1-5"   # 北京 08:37（吸收 3~5h）
+    - cron: "37 2 * * 1-5"   # 北京 10:37（吸收 1~3h）
+    - cron: "37 4 * * 1-5"   # 北京 12:37（吸收 ~1h）
+    - cron: "7 5 * * 1-5"    # 北京 13:07（准点即命中窗口）
+    - cron: "37 5 * * 1-5"   # 北京 13:37（~13:57 前完成）
+    - cron: "7 6 * * 1-5"    # 北京 14:07（最后保险）
   workflow_dispatch: {}
 
-# 并发控制：同一时间只跑一个（参照 daily_stock_analysis）。GitHub 定时延迟
-# 可达数小时（实测同账号另一项目 cron 10:00 实际在 08:05~21:01 间漂移触发），
-# 两个 cron 的 run 可能重叠——排队而非并发：先跑的完成后写 gate，排队的那个
-# 读到 gate 秒退，天然防双跑。
+# 并发控制：同一时间只跑一个，排队而非并发。多个触发的 run 重叠时，先到者
+# （可能正在睡到 13:10）跑完写 gate，排队的下一个读 gate 秒退，天然防双跑。
 concurrency:
   group: stock-picker
   cancel-in-progress: false
@@ -37,11 +47,11 @@ permissions:
 jobs:
   pick:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 240  # 最长 = 睡 3h + 装环境 + 跑 ~20m（hosted 上限 6h，留余量）
     steps:
       - uses: actions/checkout@v4
 
-      # ---- 当日 gate：读最近一次 run 写下的标记（cache 跨 run 传递）-------
+      # ---- gate 标记：读最近一次 run 写下的标记（cache 跨 run 传递）-------
       - uses: actions/cache/restore@v4
         id: gate
         with:
@@ -50,26 +60,38 @@ jobs:
           restore-keys: |
             run-gate-
 
-      - name: 当日已跑则跳过（秒退，不装环境）
-        id: gate_check
+      - name: gate + 时间窗检查（已跑秒退 / 太早跳过 / 未到点等待）
+        id: precheck
         run: |
-          # 按北京时间判定"同一天"（主触发在 UTC 前一日的 22 点档）
-          TODAY=$(TZ='Asia/Shanghai' date +%F)
+          TODAY=$(TZ='Asia/Shanghai' date +%F)   # 按北京时间判定"同一天"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "手动触发，忽略当日 gate，强制运行"
+            echo "手动触发，忽略 gate 与时间窗，强制运行"
             echo "skip=false" >> "$GITHUB_OUTPUT"
           elif [ -f .run_gate ] && [ "$(cat .run_gate)" = "$TODAY" ]; then
             echo "今天（$TODAY）已有成功的 run，跳过"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "今天（$TODAY）尚未运行，继续"
-            echo "skip=false" >> "$GITHUB_OUTPUT"
+            TARGET=$(TZ='Asia/Shanghai' date -d '13:10' +%s)  # 今天 13:10（北京）
+            NOW=$(TZ='Asia/Shanghai' date +%s)
+            DIFF=$(( TARGET - NOW ))
+            if [ "$DIFF" -gt 10800 ]; then
+              echo "现在 $(TZ='Asia/Shanghai' date '+%H:%M')，距 13:10 超过 3 小时，本轮跳过（后续触发点会跑）"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            elif [ "$DIFF" -gt 0 ]; then
+              echo "现在 $(TZ='Asia/Shanghai' date '+%H:%M')，距 13:10 还有 $((DIFF / 60)) 分钟，等待到点…"
+              while [ "$(TZ='Asia/Shanghai' date +%s)" -lt "$TARGET" ]; do sleep 300; done
+              echo "到点（$(TZ='Asia/Shanghai' date '+%H:%M')），开始运行"
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "已过 13:10（现在 $(TZ='Asia/Shanghai' date '+%H:%M')），立即运行"
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       # K线/清单磁盘缓存 + 复盘策略版本：restore-keys 恢复最近一次 run 的缓存，
       # 本次只拉增量，跑完写回新 key（跨 run 增量累积；策略版本随之演进）
       - uses: actions/cache@v4
-        if: steps.gate_check.outputs.skip != 'true'
+        if: steps.precheck.outputs.skip != 'true'
         with:
           path: |
             data_cache
@@ -79,14 +101,14 @@ jobs:
             astock-cache-
 
       - uses: actions/setup-python@v5
-        if: steps.gate_check.outputs.skip != 'true'
+        if: steps.precheck.outputs.skip != 'true'
         with:
           python-version: "3.12"
           cache: "pip"
           cache-dependency-path: pyproject.toml
 
       - name: 安装依赖
-        if: steps.gate_check.outputs.skip != 'true'
+        if: steps.precheck.outputs.skip != 'true'
         run: |
           python -m pip install --upgrade pip
           pip install .
@@ -94,7 +116,7 @@ jobs:
           python -c "import httpx, urllib3, openai; import astock.cli; import astock.review; print('依赖与导入 OK')"
 
       - name: 运行选股
-        if: steps.gate_check.outputs.skip != 'true'
+        if: steps.precheck.outputs.skip != 'true'
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           ASTOCK_PROVIDER: nim
@@ -104,11 +126,11 @@ jobs:
         run: python main.py
 
       - name: 完整报告输出到日志
-        if: steps.gate_check.outputs.skip != 'true'
+        if: steps.precheck.outputs.skip != 'true'
         run: cat "reports/$(ls -t reports | head -1)/report.md"
 
       - name: 上传报告与策略版本 artifact（保留 30 天）
-        if: steps.gate_check.outputs.skip != 'true'
+        if: steps.precheck.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: astock-report-${{ github.run_id }}
@@ -117,13 +139,13 @@ jobs:
             strategies/
           retention-days: 30
 
-      # ---- 跑完才写 gate：前面任一步失败则不写，第二个 cron 触发时自动重试 --
+      # ---- 跑完才写 gate：前面任一步失败则不写，后续触发自动重试 ----------
       - name: 写当日 gate 标记
-        if: steps.gate_check.outputs.skip != 'true'
+        if: steps.precheck.outputs.skip != 'true'
         run: TZ='Asia/Shanghai' date +%F > .run_gate
 
       - uses: actions/cache/save@v4
-        if: steps.gate_check.outputs.skip != 'true'
+        if: steps.precheck.outputs.skip != 'true'
         with:
           path: .run_gate
           key: run-gate-${{ github.run_id }}

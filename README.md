@@ -108,7 +108,7 @@ ASTOCK_CACHE_DIR=/path/to/cache python main.py   # 自定义缓存目录
 
 ## GitHub Actions 定时运行
 
-`.github/workflows/run-picker.yml`：**每个工作日三个定时触发**——主触发北京 06:07（GitHub 调度延迟通常数小时，报告一般在开盘前后到 14:00 之间落地）+ 兜底 14:07 / 14:37。GitHub 定时调度不精确（延迟可达数小时甚至整轮丢弃），三个触发点互为兜底；当日去重标记保证一天只真跑一次（第一个成功 run 落盘后，当天的后续触发秒退跳过）；第一次失败则后续触发自动重试。结果在 workflow 运行日志中查看（完整报告也会打印到日志），并上传 `astock-report-*` artifact（保留 30 天）。
+`.github/workflows/run-picker.yml`：**每个工作日 7 个定时触发点**（北京 06:37 / 08:37 / 10:37 / 12:37 / 13:07 / 13:37 / 14:07）。GitHub 定时调度延迟严重且不可预测（实测 2~8 小时、甚至整轮丢弃），单点 cron 定不准，所以工作流内置「gate + 时间窗」检查：每个触发先看当天是否已成功跑过（已跑秒退）；距北京 13:10 超 3 小时的太早触发直接跳过；不足 3 小时的**睡到 13:10 开跑**（吸收调度延迟）；已过 13:10 的立即开跑。效果：调度延迟 0~7 小时的触发都能让选股在 **13:10~13:41 开跑、约 14:00 前完成**（job 全程约 20 分钟）；延迟 >7h 的极端天傍晚出结果，不空缺。第一个成功的 run 写当日标记，后续触发秒退；失败的 run 自动由后续触发重试。结果在 workflow 运行日志中查看（完整报告也会打印到日志），并上传 `astock-report-*` artifact（保留 30 天）。
 
 前置一步：仓库 **Settings → Secrets and variables → Actions** 添加 `NVIDIA_API_KEY`（免费 key 申请：[build.nvidia.com](https://build.nvidia.com)）。
 
