@@ -44,7 +44,7 @@ PYTHONIOENCODING=utf-8 PYTHONPATH=. .venv/Scripts/python tests/test_review.py
 
 ## 定时运行 / Docker
 
-- `.github/workflows/run-picker.yml`：**七 cron**（北京 06:37/08:37/10:37/12:37/13:07/13:37/14:07，首个为 `37 22 * * 0-4` 其余 `1-5` 同日档）+ **precheck「gate + 时间窗」**：当天已跑秒退；距北京 13:10 超 3h 跳过；不足 3h **睡到 13:10 开跑**（吸收调度延迟）；已过 13:10 立即跑——延迟 0~7h 都能在 ~14:00 前完成（job ~20 分钟）。背景：GitHub schedule 延迟不可预测（实测 +2.3h~+8h、整天丢弃；猜 cron 没用，2026-10-16 由"赌延迟"改为"睡到点"）。gate 按北京时间去重（`.run_gate` 走 cache，`TZ=Asia/Shanghai date +%F`——**读写都必须带 TZ**，06:37 触发在 UTC 前一天）；第一个成功 run 写 gate，当天后续触发秒退；手动 workflow_dispatch 忽略 gate 与时间窗强制跑；失败不写 gate 后续触发重试。concurrency 组 `stock-picker` 排队防并发双跑。需 repo secret `NVIDIA_API_KEY`
+- `.github/workflows/run-picker.yml`：**七 cron**（北京 06:37/08:37/10:37/12:37/13:07/13:37/14:07，首个为 `37 22 * * 0-4` 其余 `1-5` 同日档）+ **precheck「gate + 时间窗」**：当天已跑秒退；距北京 13:10 超 3h 跳过；不足 3h **睡到 13:10 开跑**（吸收调度延迟）；已过 13:10 立即跑——延迟 0~7h 都能在 ~14:00 前完成（job ~20 分钟）。背景：GitHub schedule 延迟不可预测（实测 +2.3h~+8h、整天丢弃；猜 cron 没用，2026-10-16 由"赌延迟"改为"睡到点"）。gate 按北京时间去重（`.run_gate` 走 cache，`TZ=Asia/Shanghai date +%F`——**读写都必须带 TZ**，06:37 触发在 UTC 前一天）；第一个成功 run 写 gate，当天后续触发秒退；手动 workflow_dispatch 忽略 gate 与时间窗强制跑；失败不写 gate 后续触发重试。concurrency 组 `stock-picker` 排队防并发双跑。**CI 缓存必须含 reports/**（复盘读上一次 run 的 picks.json——reports/ 在 .gitignore，不进缓存则 CI 每天都是"首次运行"、复盘永远跳过）。需 repo secret `NVIDIA_API_KEY`
 - `Dockerfile`（python:3.12-slim，`pip install .[web]`）+ `docker-compose.yml`（picker 跑批 / web UI 8501）+ `.dockerignore`
 - 无 `.env` 时纯环境变量可用（env_map）；workflow 显式设 `ASTOCK_MODEL=nvidia/nemotron-3-super-120b-a12b`
 
