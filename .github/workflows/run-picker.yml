@@ -88,14 +88,18 @@ jobs:
             fi
           fi
 
-      # K线/清单磁盘缓存 + 复盘策略版本：restore-keys 恢复最近一次 run 的缓存，
-      # 本次只拉增量，跑完写回新 key（跨 run 增量累积；策略版本随之演进）
+      # K线/清单磁盘缓存 + 复盘策略版本 + 历史 run 报告：restore-keys 恢复
+      # 最近一次 run 的缓存，本次只拉增量，跑完写回新 key（跨 run 增量累积）。
+      # reports/ 必须进缓存：复盘（review.py）要读上一次 run 的 picks.json——
+      # reports/ 在 .gitignore 里，不进缓存的话 CI 上每次都是"首次运行"，
+      # 复盘永远跳过、策略版本永远不演进。
       - uses: actions/cache@v4
         if: steps.precheck.outputs.skip != 'true'
         with:
           path: |
             data_cache
             strategies
+            reports
           key: astock-cache-${{ github.run_id }}
           restore-keys: |
             astock-cache-
@@ -126,16 +130,22 @@ jobs:
         run: python main.py
 
       - name: 完整报告输出到日志
+        id: report
         if: steps.precheck.outputs.skip != 'true'
-        run: cat "reports/$(ls -t reports | head -1)/report.md"
+        run: |
+          DIR="reports/$(ls -t reports | head -1)"
+          echo "本次 run 目录：$DIR"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          cat "$DIR/report.md"
 
+      # 只传本次 run 的报告（缓存恢复的历史 run 不重复上传）
       - name: 上传报告与策略版本 artifact（保留 30 天）
         if: steps.precheck.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: astock-report-${{ github.run_id }}
           path: |
-            reports/
+            ${{ steps.report.outputs.dir }}
             strategies/
           retention-days: 30
 
