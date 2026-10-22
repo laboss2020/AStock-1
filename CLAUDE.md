@@ -46,7 +46,7 @@ PYTHONIOENCODING=utf-8 PYTHONPATH=. .venv/Scripts/python tests/test_review.py
 
 - `.github/workflows/run-picker.yml`：**七 cron**（北京 06:37/08:37/10:37/12:37/13:07/13:37/14:07，首个为 `37 22 * * 0-4` 其余 `1-5` 同日档）+ **precheck「gate + 时间窗」**：当天已跑秒退；距北京 13:10 超 3h 跳过；不足 3h **睡到 13:10 开跑**（吸收调度延迟）；已过 13:10 立即跑——延迟 0~7h 都能在 ~14:00 前完成（job ~20 分钟）。背景：GitHub schedule 延迟不可预测（实测 +2.3h~+8h、整天丢弃；猜 cron 没用，2026-10-16 由"赌延迟"改为"睡到点"）。gate 按北京时间去重（`.run_gate` 走 cache，`TZ=Asia/Shanghai date +%F`——**读写都必须带 TZ**，06:37 触发在 UTC 前一天）；第一个成功 run 写 gate，当天后续触发秒退；手动 workflow_dispatch 忽略 gate 与时间窗强制跑；失败不写 gate 后续触发重试。concurrency 组 `stock-picker` 排队防并发双跑。**CI 缓存必须含 reports/**（复盘读上一次 run 的 picks.json——reports/ 在 .gitignore，不进缓存则 CI 每天都是"首次运行"、复盘永远跳过）。需 repo secret `NVIDIA_API_KEY`
 - `Dockerfile`（python:3.12-slim，`pip install .[web]`）+ `docker-compose.yml`（picker 跑批 / web UI 8501）+ `.dockerignore`
-- 无 `.env` 时纯环境变量可用（env_map）；workflow 显式设 `ASTOCK_MODEL=nvidia/nemotron-3-super-120b-a12b`
+- 无 `.env` 时纯环境变量可用（env_map）；workflow 的 ASTOCK_MODEL 用 `${{ secrets.ASTOCK_MODEL || 'z-ai/glm-5.3-flash' }}`（secret 优先）
 
 ## 环境注意（本机）
 
@@ -71,10 +71,10 @@ PYTHONIOENCODING=utf-8 PYTHONPATH=. .venv/Scripts/python tests/test_review.py
 - BSE 920xxx 判断须先于 leading-9 规则（见 `quotes.py::market_prefix`）
 - `filters.py` 的 docstring 含 `\*ST`，须保持 raw 字符串
 - typer CLI 用 `@app.callback(invoke_without_command=True)` 保住裸跑（参考项目血泪教训）
-- `json_mode=True` → response_format json_object **强制顶层是 JSON 对象**，数组永远出不来——Stage 3 快筛用 `{"stocks": [...]}` 包裹；个别模型（glm-5.3-flash）会把对象包进数组，analysis.py 有 list 防御
+- `json_mode=True` → response_format json_object **强制顶层是 JSON 对象**，数组永远出不来——Stage 3 快筛用 `{"stocks": [...]}` 包裹；个别模型（glm-5.3-flash）会把对象包进数组：Stage 1 有就地防御，Stage 4/5 统一走 `llm.py::first_dict`（取第一个 dict，空则降级默认值/规则兜底）
 - 推理模型（glm/deepseek/nemotron thinkers）max_tokens 太小时推理吃满 token → content 空（finish=length）；llm.py 空 content 自动提额 max_tokens+=2048 重试；定价 max_tokens 起步 3000
 - 定价 LLM 返回全 0 数值（如对"放弃"评级的股票给空壳 JSON）→ pricing.validate 拦住走规则兜底（2026-10-08 真实跑验证）
-- 一只股票的定价 LLM 失败只规则兜底记录错误，**不报废整个 run**（pipeline.py Stage 5）
+- **错误隔离**（2026-10-23 教训，run #37 单只超时报废整跑）：快筛批次失败/深度分析单只失败只记录 `result.errors` 跳过，**不报废整个 run**——成功的部分照常定价出报告；全部失败时 errors 留明确记录（"今日无选股产出"）。仅 Stage 1 大盘体检失败是 fatal（LLM 不通后面全白跑）
 - 磁盘缓存读 CSV 时 Date 列是字符串——`read_csv_cache` 必须传 `parse_dates=["Date"]`；code 列必须 `dtype={"code": str}`（否则 000001 前导零丢失）
 - universe 是盘中快照：缓存按天（同日复用、隔天重拉），勿做跨天缓存
 - 复盘时序：run_review 在 save_report 前调用；测试里"用 vN"的断言出现在第 N+1 轮 run（版本在 pipeline 开头已定，当轮复盘生成的新版本下一轮才生效）

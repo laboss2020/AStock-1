@@ -130,6 +130,115 @@ def test_primary_excluded_from_chain():
     print("  主模型从备选链排除 OK")
 
 
+def test_first_dict_helper():
+    from astock.llm import first_dict
+    assert first_dict([{"a": 1}, {"b": 2}]) == {"a": 1}
+    assert first_dict([1, {"a": 1}, 2]) == {"a": 1}
+    assert first_dict([1, 2]) == {}
+    assert first_dict({"a": 1}) == {"a": 1}
+    assert first_dict("text") == {}
+    print("  first_dict helper OK")
+
+
+def test_deep_pricing_list_wrapped():
+    """glm-5.3-flash 把 JSON 对象包进数组——deep_analyze / pricing 不崩，
+    取第一个 dict 元素（2026-10-23 CI 实测 003017 因此失败过）。"""
+    import tempfile
+    from types import SimpleNamespace
+    import astock.analysis as analysis_mod
+    import astock.pricing as pricing_mod
+    from test_e2e_mock import _mock_kline
+
+    class ListLLM:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def chat_json(self, system, user, **kw):
+            return [self.payload]  # 对象包进数组
+
+    cfg = load_config(api_key="mock-key")
+
+    v = analysis_mod.deep_analyze(cfg, ListLLM(
+        {"code": "600601", "score": 77, "verdict": "值得买入",
+         "buy_logic": "包在数组里", "risks": [], "catalysts": [],
+         "dimension_summary": {"技术面": "多头"}}),
+        analysis_mod.MarketRegime(), {"code": "600601", "name": "mock"})
+    assert v.score == 77 and v.verdict == "值得买入", "wrapped dict not unwrapped"
+
+    df = _mock_kline("600601")
+    close = float(df["Close"].iloc[-1])
+    e_lo, e_hi = round(close * 0.98, 2), round(close * 1.02, 2)
+    plan = pricing_mod.suggest_prices(cfg, ListLLM(
+        {"entry_low": e_lo, "entry_high": e_hi,
+         "stop_loss": round(e_lo - close * 0.04, 2),
+         "target_low": round(e_hi * 1.10, 2),
+         "target_high": round(e_hi * 1.25, 2)}),
+        {"code": "600601", "name": "mock"},
+        SimpleNamespace(score=80, verdict="值得买入", buy_logic="x", risks=[]), df)
+    assert not plan.fallback and plan.entry_low > 0, "wrapped pricing not unwrapped"
+    print("  deep/pricing 数组包裹防御 OK")
+
+
+def test_deep_empty_list_degrades():
+    """空数组 → 降级为默认"放弃"，不崩（pipeline 兜一层 errors 记录）。"""
+    import astock.analysis as analysis_mod
+
+    class EmptyLLM:
+        def chat_json(self, system, user, **kw):
+            return []
+
+    v = analysis_mod.deep_analyze(load_config(api_key="mock-key"), EmptyLLM(),
+                                  analysis_mod.MarketRegime(),
+                                  {"code": "600602", "name": "mock"})
+    assert v.verdict == "放弃" and v.score == 0
+    print("  deep 空数组降级为放弃 OK")
+
+
+def test_pipeline_skips_failing_deep():
+    """深度分析单只 LLMError（如 glm-5.3-flash 超时）→ 只跳过该只，
+    其余照常定价出 picks——成功的部分不被报废（2026-10-23 run #37 教训）。"""
+    import tempfile
+    import astock.pipeline as pipeline_mod
+    from astock.llm import LLMError
+    from test_e2e_mock import MockLLM as BaseMockLLM, _mock_kline, _mock_universe
+
+    class FlakyDeepLLM(BaseMockLLM):
+        deep_calls = 0
+
+        def chat_json(self, system, user, **kw):
+            if "做深度分析" in system:
+                FlakyDeepLLM.deep_calls += 1
+                if FlakyDeepLLM.deep_calls == 1:  # 第一只被深度分析的股票超时
+                    raise LLMError("mock: Request timed out.")
+            return super().chat_json(system, user, **kw)
+
+    pipeline_mod.fetch_universe = _mock_universe
+    pipeline_mod.get_kline = _mock_kline
+    pipeline_mod._merge_kline_momentum = lambda pre, limit: pre.head(limit)
+    pipeline_mod.momentum_summary = lambda df: {"close": 21.0, "chg_5d": 1.2,
+                                                "chg_20d": 3.4, "rsi": 55.0}
+    pipeline_mod.stock_fund_flow = lambda code, days=20: {
+        "history": [{"date": "2026-09-23", "main_net_yi": 0.5}],
+        "sum_5d": 2.5, "sum_20d": 8.0, "today": 0.3}
+    pipeline_mod.stock_news = lambda code, limit=8: [
+        {"date": "2026-09-23", "title": f"mock 新闻 {code}"}]
+    pipeline_mod._collect_market_snapshot = lambda result: {
+        "indexes": [], "index_trends": [], "market_flow": [],
+        "northbound": None, "boards": [], "industry_boards": [],
+        "hot_stocks": [], "themes": [], "news": []}
+
+    out = tempfile.mkdtemp(prefix="astock_skip_test_")
+    cfg = load_config(api_key="mock-key", candidate_count=8, triage_count=4,
+                      max_picks=3, output_dir=out)
+    result = pipeline_mod.run_pipeline(cfg, FlakyDeepLLM())
+    assert FlakyDeepLLM.deep_calls >= 2, "deep stage never ran the failing branch"
+    assert result.picks, "partial deep failures must not scrap the run"
+    assert len(result.picks) == 3, f"expected 3 picks, got {len(result.picks)}"
+    assert any(e.startswith("深度分析") and "失败" in e for e in result.errors), \
+        f"failure not recorded: {result.errors}"
+    print(f"  单只深度分析失败跳过 OK（picks={len(result.picks)}, errors 记录失败）")
+
+
 def main() -> int:
     print("LLM FALLBACK TESTS:")
     _cleanup()
@@ -139,6 +248,10 @@ def main() -> int:
     test_non404_no_switch()
     test_nim_builtin_defaults()
     test_primary_excluded_from_chain()
+    test_first_dict_helper()
+    test_deep_pricing_list_wrapped()
+    test_deep_empty_list_degrades()
+    test_pipeline_skips_failing_deep()
     _cleanup()
     print("ALL LLM FALLBACK TESTS PASSED")
     return 0

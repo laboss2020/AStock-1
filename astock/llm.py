@@ -231,6 +231,14 @@ class LLMClient:
 _CODE_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
 
+def first_dict(raw: Any) -> dict:
+    """个别模型（glm-5.3-flash）会把 JSON 对象包进数组——统一取第一个
+    dict 元素；空数组/非对象时返回 {}（调用方走字段默认值路径，不崩溃）。"""
+    if isinstance(raw, list):
+        return next((x for x in raw if isinstance(x, dict)), {})
+    return raw if isinstance(raw, dict) else {}
+
+
 def parse_json(text: str) -> Any:
     """Best-effort JSON extraction: direct parse → fenced block → brace scan."""
     text = text.strip()

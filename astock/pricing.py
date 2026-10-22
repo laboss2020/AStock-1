@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 from .analysis import ASTOCK_RULES
 from .config import Config
-from .llm import LLMClient
+from .llm import LLMClient, first_dict
 
 logger = logging.getLogger(__name__)
 
@@ -156,8 +156,9 @@ def suggest_prices(cfg: Config, llm: LLMClient, bundle: dict,
         f"风险: {'; '.join(verdict.risks) or '无'}",
     ]
     # max_tokens 3000：推理模型（glm/deepseek thinkers）需要推理余量——1500
-    # 会反复触发空 content 提额重试（见 llm.py）。
-    raw = llm.chat_json(system, "\n".join(user_parts), max_tokens=3000, temperature=0.2)
+    # 会反复触发空 content 提额重试（见 llm.py）。first_dict：glm-5.3-flash
+    # 偶发把对象包进数组；空 dict → 全 0 → 下方 _validate 拦住走规则兜底。
+    raw = first_dict(llm.chat_json(system, "\n".join(user_parts), max_tokens=3000, temperature=0.2))
 
     def _f(key: str) -> float:
         try:

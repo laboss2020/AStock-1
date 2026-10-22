@@ -22,7 +22,7 @@ import logging
 from dataclasses import dataclass, field
 
 from .config import Config
-from .llm import LLMClient
+from .llm import LLMClient, first_dict
 
 logger = logging.getLogger(__name__)
 
@@ -246,7 +246,11 @@ def deep_analyze(cfg: Config, llm: LLMClient, regime: MarketRegime,
         "# 候选股票完整数据包\n",
         json.dumps(bundle, ensure_ascii=False, indent=1, default=str),
     ]
-    raw = llm.chat_json(system, "\n\n".join(user_parts), max_tokens=3000)
+    raw = first_dict(llm.chat_json(system, "\n\n".join(user_parts), max_tokens=3000))
+    if not raw:
+        # glm-5.3-flash 偶发把对象包进数组且取不出 dict——降级为"放弃"，
+        # 不让单只的畸形输出炸掉整个 run（pipeline 侧还会兜一层）。
+        logger.warning("深度分析 %s %s LLM 输出为空数组，降级为放弃", code, name)
     verdict = DeepVerdict(
         code=str(raw.get("code", code)),
         name=str(raw.get("name", name)),

@@ -159,12 +159,17 @@ def run_pipeline(cfg: Config, llm: LLMClient) -> RunResult:
             verdict = deep_analyze(cfg, llm, regime, bundle,
                                    strategy_text=blocks.get("deep", ""))
             verdicts.append((cand, verdict))
-        except LLMError:
-            raise  # fatal: auth/quota — abort the run
         except Exception as e:
+            # 单只失败（LLM 超时/输出不合法等）只跳过该只——Stage 1-3 的工作
+            # 都在它身后，成功的部分照常定价出报告（auth 类错误早在 Stage 1
+            # 就暴露，走到这里的几乎都是偶发故障）。
             msg = f"深度分析 {code} {name} 失败: {e}"
             logger.warning("%s\n%s", msg, traceback.format_exc())
             result.errors.append(msg)
+
+    if deep_pool and not verdicts:
+        result.errors.append(
+            f"深度分析全部失败（{len(deep_pool)} 只，详见 errors）——今日无选股产出")
 
     verdicts.sort(key=lambda cv: (verdict_rank(cv[1]), cv[1].score), reverse=True)
     top = verdicts[: cfg.max_picks]
@@ -298,9 +303,8 @@ def _triage_all(cfg, llm, regime, candidates, result, strategy_text: str = "") -
         compact = [_compact_candidate(r) for r in batch]
         try:
             scores = triage_batch(cfg, llm, regime, compact, strategy_text=strategy_text)
-        except LLMError:
-            raise
         except Exception as e:
+            # 批次失败（LLM 超时等）只放弃该批 8 只，不报废整个 run
             msg = f"快筛批次 {i // batch_size + 1} 失败: {e}"
             logger.warning(msg)
             result.errors.append(msg)
@@ -313,6 +317,8 @@ def _triage_all(cfg, llm, regime, candidates, result, strategy_text: str = "") -
             r["_triage_score"] = sc["score"]
             r["_triage_reason"] = sc["reason"]
             out.append(r)
+    if rows and not out:
+        result.errors.append("快筛全部批次失败——候选池清零，今日无选股产出")
     return out
 
 
