@@ -52,7 +52,7 @@ PYTHONIOENCODING=utf-8 PYTHONPATH=. .venv/Scripts/python tests/test_review.py
 
 - **控制台 cp932**：跑任何输出中文的命令必须加 `PYTHONIOENCODING=utf-8`
 - **系统代理已死**：Windows 注册表代理（192.168.88.7:808）彻底断连（WinError 10061）——数据层与 LLM 层均已默认 `trust_env=False` 直连（国内数据源与 NIM 直连全通）；需要走代理设 `ASTOCK_TRUST_ENV=1` / `ASTOCK_LLM_TRUST_ENV=1`
-- **NIM 模型现状（2026-10-08 实测）**：`/v1/models` 列表与实际部署不一致（deepseek-v3.1、mistral-large、gemma、kimi、palmyra 等大量 404）；**实测可用**：`nvidia/nemotron-3-super-120b-a12b`（5-8s，主力）、`z-ai/glm-5.3`（~10s）、`openai/gpt-oss-20b`（~16s）、`google/diffusiongemma-26b-a4b-it`（输出带 ```json 包裹，chat_json 可解析）、`nvidia/nemotron-3-ultra-550b-a55b`（~18s）
+- **NIM 模型现状（2026-10-22 实测）**：`/v1/models` 列表与实际部署不一致（83 个里大半 404），且**模型会隔夜下架**（nemotron-3-super-120b-a12b 10-20 还在、10-21 全天 404，导致当日 6 次 CI run 全失败）；**实测可用**：`z-ai/glm-5.3-flash`（1.2s，现主力）、`nvidia/nemotron-3-ultra-550b-a55b`（0.8s）、`deepseek-ai/deepseek-v4.1-flash`（3.2s）、`stepfun-ai/step-5-preview`（2.6s）、`openai/gpt-oss-20b`（18.8s）、`nvidia/nemotron-3.5-super-vl-120b-a12b`（0.7s，视觉模型）；**已死**：nemotron-3-super、glm-5.3（超时）、diffusiongemma（超时）。llm.py 有 404 防御：模型缺失自动切备选链（`ASTOCK_FALLBACK_MODELS` 可配，nim 默认 glm-5.3-flash → deepseek-v4.1-flash → nemotron-3-ultra）；workflow 的 ASTOCK_MODEL 用 `${{ secrets.ASTOCK_MODEL || '默认' }}`——secret 优先，勿在 workflow 硬编码盖掉
 - **东财防封**：东财 push2/push2his 对请求过密的本机会临时封禁（RemoteDisconnected），几分钟到几小时后解除。所有东财调用必须经 `em_get()` 节流（勿绕过直连 requests）；kline.py 有熔断（连续 3 次失败后本进程直接走新浪）；测试时优先用腾讯/新浪/同花顺路径
 - **mootdx 不可用**：本机 TCP 连得上但服务器返回空数据——数据层是纯 HTTP，勿尝试改回 mootdx
 

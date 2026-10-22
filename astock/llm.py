@@ -39,6 +39,15 @@ logger = logging.getLogger(__name__)
 # env-var hint instead.
 _RETRYABLE = (APIConnectionError, APITimeoutError, RateLimitError)
 
+# Built-in fallback chain for NIM (provider rotates its catalog overnight —
+# nemotron-3-super-120b-a12b answered 404 from 2026-10-21). All verified
+# live 2026-10-22. Override with ASTOCK_FALLBACK_MODELS (comma separated).
+_NIM_FALLBACK_MODELS = (
+    "z-ai/glm-5.3-flash",
+    "deepseek-ai/deepseek-v4.1-flash",
+    "nvidia/nemotron-3-ultra-550b-a55b",
+)
+
 
 class LLMError(RuntimeError):
     """Fatal LLM failure (auth, model missing, retries exhausted)."""
@@ -69,6 +78,11 @@ class LLMClient:
             raise LLMError(
                 "缺少 model 名（provider=openai_compatible 时必须提供）。\n" + config.env_hint()
             )
+        fallbacks = config.resolved_fallback_models()
+        if not fallbacks and config.provider == "nim":
+            fallbacks = list(_NIM_FALLBACK_MODELS)
+        # 主模型本身不在备选链里（切换到同一个模型没有意义）
+        self.fallback_models = [m for m in fallbacks if m and m != self.model]
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url,
@@ -93,68 +107,94 @@ class LLMClient:
         temperature: float = 0.3,
         max_tokens: int = 4096,
     ) -> str:
-        """One chat completion. Retries transient errors with backoff."""
-        last_err: Exception | None = None
-        for attempt in range(self.config.llm_max_retries + 1):
-            try:
-                kwargs: dict[str, Any] = {
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                }
-                if json_mode:
-                    # Ask politely; not every provider honours response_format.
-                    kwargs["response_format"] = {"type": "json_object"}
-                resp = self.client.chat.completions.create(**kwargs)
-                msg = resp.choices[0].message
-                content = msg.content or ""
-                if not content.strip():
-                    # Reasoning models (glm-5.3 / deepseek thinkers) emit the
-                    # answer in content after a separate reasoning_content
-                    # span — with a too-small token budget the whole budget
-                    # burns on reasoning and content comes back empty. Retry
-                    # with a bigger budget; transient empty answers also
-                    # deserve a retry.
-                    finish = resp.choices[0].finish_reason
-                    if finish == "length":
-                        max_tokens += 2048
+        """One chat completion. Retries transient errors with backoff; on a
+        404 "model/function not found" (providers rotate their catalogs)
+        switches to the next fallback model and restarts the retry loop —
+        the switch sticks for all later calls of this client."""
+        tried: set[str] = {self.model}
+        while True:
+            last_err: Exception | None = None
+            for attempt in range(self.config.llm_max_retries + 1):
+                try:
+                    kwargs: dict[str, Any] = {
+                        "model": self.model,
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user},
+                        ],
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                    }
+                    if json_mode:
+                        # Ask politely; not every provider honours response_format.
+                        kwargs["response_format"] = {"type": "json_object"}
+                    resp = self.client.chat.completions.create(**kwargs)
+                    msg = resp.choices[0].message
+                    content = msg.content or ""
+                    if not content.strip():
+                        # Reasoning models (glm-5.3 / deepseek thinkers) emit the
+                        # answer in content after a separate reasoning_content
+                        # span — with a too-small token budget the whole budget
+                        # burns on reasoning and content comes back empty. Retry
+                        # with a bigger budget; transient empty answers also
+                        # deserve a retry.
+                        finish = resp.choices[0].finish_reason
+                        if finish == "length":
+                            max_tokens += 2048
+                            logger.warning(
+                                "LLM 返回空 content（finish=length，推理吃满 token，"
+                                "max_tokens 提升到 %d 重试）", max_tokens,
+                            )
+                        last_err = ValueError("empty response")
+                        delay = self.config.llm_retry_delay * (2**attempt)
                         logger.warning(
-                            "LLM 返回空 content（finish=length，推理吃满 token，"
-                            "max_tokens 提升到 %d 重试）", max_tokens,
+                            "LLM 调用第 %d 次失败（empty content），%.0fs 后重试",
+                            attempt + 1, delay,
                         )
-                    last_err = ValueError("empty response")
-                    delay = self.config.llm_retry_delay * (2**attempt)
-                    logger.warning(
-                        "LLM 调用第 %d 次失败（empty content），%.0fs 后重试",
-                        attempt + 1, delay,
-                    )
-                    time.sleep(delay)
-                    continue
-                return content
-            except _RETRYABLE as err:
-                last_err = err
-            except APIStatusError as err:
-                if _is_retryable_status(err):
+                        time.sleep(delay)
+                        continue
+                    return content
+                except _RETRYABLE as err:
                     last_err = err
-                else:
-                    raise LLMError(
-                        f"LLM 请求失败（HTTP {getattr(err, 'status_code', '?')}）：{err}\n"
-                        f"provider={self.config.provider} model={self.model}"
-                    ) from err
-            delay = self.config.llm_retry_delay * (2**attempt)
-            logger.warning(
-                "LLM 调用第 %d 次失败（%s），%.0fs 后重试",
-                attempt + 1, str(last_err)[:120], delay,
-            )
-            time.sleep(delay)
-        raise LLMError(
-            f"LLM 调用重试 {self.config.llm_max_retries} 次后仍失败：{last_err}\n"
-            f"provider={self.config.provider} model={self.model}"
-        ) from last_err
+                except APIStatusError as err:
+                    if self._switch_model_if_missing(err, tried):
+                        last_err = None
+                        break  # restart the whole retry loop on the new model
+                    if _is_retryable_status(err):
+                        last_err = err
+                    else:
+                        raise LLMError(
+                            f"LLM 请求失败（HTTP {getattr(err, 'status_code', '?')}）：{err}\n"
+                            f"provider={self.config.provider} model={self.model}"
+                        ) from err
+                delay = self.config.llm_retry_delay * (2**attempt)
+                logger.warning(
+                    "LLM 调用第 %d 次失败（%s），%.0fs 后重试",
+                    attempt + 1, str(last_err)[:120], delay,
+                )
+                time.sleep(delay)
+            else:
+                raise LLMError(
+                    f"LLM 调用重试 {self.config.llm_max_retries} 次后仍失败：{last_err}\n"
+                    f"provider={self.config.provider} model={self.model}"
+                ) from last_err
+
+    def _switch_model_if_missing(self, err: APIStatusError, tried: set[str]) -> bool:
+        """404 "Function/Model not found" → the catalog dropped the model
+        (NIM removed nemotron-3-super overnight, 2026-10-21). Switch to the
+        next untried fallback; True when switched."""
+        if getattr(err, "status_code", None) != 404:
+            return False
+        text = str(err).lower()
+        if "not found" not in text or not ("function" in text or "model" in text):
+            return False
+        nxt = next((m for m in self.fallback_models if m not in tried), "")
+        if not nxt:
+            return False
+        logger.warning("模型 %s 已不可用（HTTP 404 Not Found），切换备选 → %s", self.model, nxt)
+        self.model = nxt
+        tried.add(nxt)
+        return True
 
     # -- JSON helpers ------------------------------------------------------
 

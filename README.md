@@ -110,7 +110,7 @@ ASTOCK_CACHE_DIR=/path/to/cache python main.py   # 自定义缓存目录
 
 `.github/workflows/run-picker.yml`：**每个工作日 7 个定时触发点**（北京 06:37 / 08:37 / 10:37 / 12:37 / 13:07 / 13:37 / 14:07）。GitHub 定时调度延迟严重且不可预测（实测 2~8 小时、甚至整轮丢弃），单点 cron 定不准，所以工作流内置「gate + 时间窗」检查：每个触发先看当天是否已成功跑过（已跑秒退）；距北京 13:10 超 3 小时的太早触发直接跳过；不足 3 小时的**睡到 13:10 开跑**（吸收调度延迟）；已过 13:10 的立即开跑。效果：调度延迟 0~7 小时的触发都能让选股在 **13:10~13:41 开跑、约 14:00 前完成**（job 全程约 20 分钟）；延迟 >7h 的极端天傍晚出结果，不空缺。第一个成功的 run 写当日标记，后续触发秒退；失败的 run 自动由后续触发重试。结果在 workflow 运行日志中查看（完整报告也会打印到日志），并上传 `astock-report-*` artifact（保留 30 天）。
 
-前置一步：仓库 **Settings → Secrets and variables → Actions** 添加 `NVIDIA_API_KEY`（免费 key 申请：[build.nvidia.com](https://build.nvidia.com)）。
+前置一步：仓库 **Settings → Secrets and variables → Actions** 添加 `NVIDIA_API_KEY`（免费 key 申请：[build.nvidia.com](https://build.nvidia.com)）。可选添加 secret `ASTOCK_MODEL` 换模型（优先于 workflow 默认值）；主模型被平台下架（404）时 `llm.py` 会自动切换到备选模型链，选股不中断。
 
 - 手动触发：Actions 页 → A股选股定时运行 → **Run workflow**
 - K 线缓存跨 run 增量累积（actions/cache，昨天为止的缓存 → 今天只拉增量），复盘生成的策略版本随缓存一并累积

@@ -104,6 +104,14 @@ class Config:
             or str(LLM_PRESETS[self.provider]["default_model"])
         )
 
+    def resolved_fallback_models(self) -> list[str]:
+        """Backup models tried in order when the primary answers 404
+        (providers rotate their model catalogs — NIM 2026-10-21 removed
+        nemotron-3-super overnight). env: ASTOCK_FALLBACK_MODELS (comma
+        separated); empty = LLMClient applies a built-in NIM chain."""
+        raw = os.environ.get("ASTOCK_FALLBACK_MODELS", "")
+        return [m.strip() for m in raw.split(",") if m.strip()]
+
     def resolved_api_key(self) -> str:
         if self.api_key:
             return self.api_key
