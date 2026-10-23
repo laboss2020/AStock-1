@@ -53,6 +53,7 @@ PYTHONIOENCODING=utf-8 PYTHONPATH=. .venv/Scripts/python tests/test_review.py
 - **控制台 cp932**：跑任何输出中文的命令必须加 `PYTHONIOENCODING=utf-8`
 - **系统代理已死**：Windows 注册表代理（192.168.88.7:808）彻底断连（WinError 10061）——数据层与 LLM 层均已默认 `trust_env=False` 直连（国内数据源与 NIM 直连全通）；需要走代理设 `ASTOCK_TRUST_ENV=1` / `ASTOCK_LLM_TRUST_ENV=1`
 - **NIM 模型现状（2026-10-22 实测）**：`/v1/models` 列表与实际部署不一致（83 个里大半 404），且**模型会隔夜下架**（nemotron-3-super-120b-a12b 10-20 还在、10-21 全天 404，导致当日 6 次 CI run 全失败）；**实测可用**：`z-ai/glm-5.3-flash`（1.2s，现主力）、`nvidia/nemotron-3-ultra-550b-a55b`（0.8s）、`deepseek-ai/deepseek-v4.1-flash`（3.2s）、`stepfun-ai/step-5-preview`（2.6s）、`openai/gpt-oss-20b`（18.8s）、`nvidia/nemotron-3.5-super-vl-120b-a12b`（0.7s，视觉模型）；**已死**：nemotron-3-super、glm-5.3（超时）、diffusiongemma（超时）。llm.py 有 404 防御：模型缺失自动切备选链（`ASTOCK_FALLBACK_MODELS` 可配，nim 默认 glm-5.3-flash → deepseek-v4.1-flash → nemotron-3-ultra）；workflow 的 ASTOCK_MODEL 用 `${{ secrets.ASTOCK_MODEL || '默认' }}`——secret 优先，勿在 workflow 硬编码盖掉
+- **NIM 思考控制（2026-10-23 实测）**：llm.py 默认对 NIM 发 `chat_template_kwargs: {"thinking": false, "enable_thinking": false}` 关思考——deepseek/nemotron **生效**（reasoning 归零、耗时降 3-10×），GLM 系忽略照常思考（NIM 上 GLM 无参数可关）；**顶层参数会被 NIM 400 拒绝**（Unsupported parameter），勿改成顶层；`ASTOCK_LLM_THINKING=1` 恢复思考。单请求 timeout 150s（connect 独立 10s）、失败重试 2 次（`ASTOCK_LLM_TIMEOUT` / `ASTOCK_LLM_MAX_RETRIES` 可调）
 - **东财防封**：东财 push2/push2his 对请求过密的本机会临时封禁（RemoteDisconnected），几分钟到几小时后解除。所有东财调用必须经 `em_get()` 节流（勿绕过直连 requests）；kline.py 有熔断（连续 3 次失败后本进程直接走新浪）；测试时优先用腾讯/新浪/同花顺路径
 - **mootdx 不可用**：本机 TCP 连得上但服务器返回空数据——数据层是纯 HTTP，勿尝试改回 mootdx
 
@@ -75,6 +76,7 @@ PYTHONIOENCODING=utf-8 PYTHONPATH=. .venv/Scripts/python tests/test_review.py
 - 推理模型（glm/deepseek/nemotron thinkers）max_tokens 太小时推理吃满 token → content 空（finish=length）；llm.py 空 content 自动提额 max_tokens+=2048 重试；定价 max_tokens 起步 3000
 - 定价 LLM 返回全 0 数值（如对"放弃"评级的股票给空壳 JSON）→ pricing.validate 拦住走规则兜底（2026-10-08 真实跑验证）
 - **错误隔离**（2026-10-23 教训，run #37 单只超时报废整跑）：快筛批次失败/深度分析单只失败只记录 `result.errors` 跳过，**不报废整个 run**——成功的部分照常定价出报告；全部失败时 errors 留明确记录（"今日无选股产出"）。仅 Stage 1 大盘体检失败是 fatal（LLM 不通后面全白跑）
+- **run #42 4h 超时教训**（2026-10-23）：NIM 网关高峰单请求挂 4-5 分钟才报 Connection error，timeout=300 + 重试 3 次 → 一次失败烧 ~15 分钟，几只失败股票拖满 4h 被 GitHub 取消——现已 timeout 150/connect 10s/重试 2/关思考（失败代价 ~5 分钟）。另：deepseek-v4.1-flash **开思考时 content 为空**（reasoning 吃满但 finish=stop，不触发提额重试），关思考根治
 - 磁盘缓存读 CSV 时 Date 列是字符串——`read_csv_cache` 必须传 `parse_dates=["Date"]`；code 列必须 `dtype={"code": str}`（否则 000001 前导零丢失）
 - universe 是盘中快照：缓存按天（同日复用、隔天重拉），勿做跨天缓存
 - 复盘时序：run_review 在 save_report 前调用；测试里"用 vN"的断言出现在第 N+1 轮 run（版本在 pipeline 开头已定，当轮复盘生成的新版本下一轮才生效）

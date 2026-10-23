@@ -43,10 +43,12 @@ class _FakeAPI:
     def __init__(self, script):
         self.script = list(script)
         self.calls = 0
+        self.last_kwargs: dict = {}
 
     def create(self, **kwargs):
         item = self.script[self.calls]
         self.calls += 1
+        self.last_kwargs = kwargs
         if isinstance(item, Exception):
             raise item
         return item
@@ -138,6 +140,47 @@ def test_first_dict_helper():
     assert first_dict({"a": 1}) == {"a": 1}
     assert first_dict("text") == {}
     print("  first_dict helper OK")
+
+
+def test_nim_disables_thinking_by_default():
+    """NIM 默认发 chat_template_kwargs 关思考（deepseek/nemotron 实测生效，
+    GLM 忽略——2026-10-23 探针验证，run #42 提速改造）。"""
+    import httpx as _hx
+    llm = _client("m/primary", "")
+    api = _play(llm, [_ok("{}")])
+    llm.chat("sys", "user", json_mode=True)
+    ctk = api.last_kwargs.get("extra_body", {}).get("chat_template_kwargs", {})
+    assert ctk.get("thinking") is False and ctk.get("enable_thinking") is False, \
+        f"NIM should send thinking-off kwargs, got {api.last_kwargs.get('extra_body')}"
+    # timeout 拆分：connect 10s 快速暴露网络故障（run #42 时间黑洞）
+    assert isinstance(llm._timeout, _hx.Timeout)
+    assert llm._timeout.connect == 10.0
+    assert llm._timeout.read == float(llm.config.llm_timeout)
+    print("  NIM 默认关思考 + connect timeout 拆分 OK")
+
+
+def test_thinking_env_override():
+    """ASTOCK_LLM_THINKING=1 → 恢复思考，不发 extra_body。"""
+    os.environ["ASTOCK_LLM_THINKING"] = "1"
+    try:
+        cfg = load_config(api_key="mock-key", provider="nim", model="m/primary")
+        llm = LLMClient(cfg)
+        api = _play(llm, [_ok("{}")])
+        llm.chat("sys", "user")
+        assert "extra_body" not in api.last_kwargs, "thinking=1 must not send extra_body"
+    finally:
+        os.environ.pop("ASTOCK_LLM_THINKING", None)
+    print("  ASTOCK_LLM_THINKING=1 恢复思考 OK")
+
+
+def test_non_nim_no_thinking_param():
+    """其他 provider 兼容性未验证（顶层参数会被网关 400）——不发送 extra_body。"""
+    cfg = load_config(api_key="mock-key", provider="openai", model="m/primary")
+    llm = LLMClient(cfg)
+    api = _play(llm, [_ok("{}")])
+    llm.chat("sys", "user")
+    assert "extra_body" not in api.last_kwargs, "non-nim provider must not send extra_body"
+    print("  非 NIM provider 不发思考参数 OK")
 
 
 def test_deep_pricing_list_wrapped():
@@ -249,6 +292,9 @@ def main() -> int:
     test_nim_builtin_defaults()
     test_primary_excluded_from_chain()
     test_first_dict_helper()
+    test_nim_disables_thinking_by_default()
+    test_thinking_env_override()
+    test_non_nim_no_thinking_param()
     test_deep_pricing_list_wrapped()
     test_deep_empty_list_degrades()
     test_pipeline_skips_failing_deep()

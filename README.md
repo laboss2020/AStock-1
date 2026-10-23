@@ -48,6 +48,8 @@ python main.py -p deepseek -m deepseek-chat
 
 也可用环境变量：`ASTOCK_PROVIDER`、`ASTOCK_MODEL`、`ASTOCK_BASE_URL`、`ASTOCK_API_KEY`。
 
+**思考控制与提速**：NIM 上默认发送 `chat_template_kwargs` 关闭思考过程（deepseek/nemotron 生效、耗时降 3-10×；GLM 系模型无参数可关、照常思考）——结论直接进 content，不再等 reasoning。`ASTOCK_LLM_THINKING=1` 恢复思考；`ASTOCK_LLM_TIMEOUT`（默认 150s，connect 固定 10s）与 `ASTOCK_LLM_MAX_RETRIES`（默认 2）控制失败代价。
+
 ## CLI 选项
 
 ```

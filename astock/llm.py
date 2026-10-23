@@ -83,17 +83,32 @@ class LLMClient:
             fallbacks = list(_NIM_FALLBACK_MODELS)
         # 主模型本身不在备选链里（切换到同一个模型没有意义）
         self.fallback_models = [m for m in fallbacks if m and m != self.model]
+        # connect 单独 10s：挂起的连接等满 read timeout 才报 Connection error
+        # 是 run #42（4h 超时被取消）的主要时间黑洞。
+        self._timeout = httpx.Timeout(
+            connect=10.0,
+            read=float(config.llm_timeout),
+            write=float(config.llm_timeout),
+            pool=float(config.llm_timeout),
+        )
+        # 思考控制：NIM（vLLM 后端）的 chat_template_kwargs 实测安全（2026-10-23
+        # 三主力模型全 200）且对 deepseek/nemotron 生效——reasoning 归零、耗时降
+        # 3~10×；GLM 系忽略该参数照常思考。顶层参数会被 NIM 400 拒绝（Unsupported
+        # parameter），其他 provider 兼容性未验证——只在 nim 上发送。
+        self._disable_thinking = (
+            config.provider == "nim" and not config.llm_thinking
+        )
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url,
-            timeout=config.llm_timeout,
+            timeout=self._timeout,
             max_retries=0,  # SDK retries off — the app owns the retry policy
             # 绕过系统（注册表）代理直连：Windows 注册表代理对长连接空闲
             # ~240s 即杀、且间歇性完全断连；NIM 直连实测稳定（<1s）。
             # 需要走代理的用户设 ASTOCK_LLM_TRUST_ENV=1。
             http_client=httpx.Client(
                 trust_env=config.llm_trust_env,
-                timeout=config.llm_timeout,
+                timeout=self._timeout,
             ),
         )
 
@@ -128,6 +143,15 @@ class LLMClient:
                     if json_mode:
                         # Ask politely; not every provider honours response_format.
                         kwargs["response_format"] = {"type": "json_object"}
+                    if self._disable_thinking:
+                        # 关思考：双键通吃（deepseek/nemotron 认其一，GLM 系模板
+                        # 未用变量被 vLLM 忽略）。另见 __init__ 里 NIM 实测注释。
+                        kwargs["extra_body"] = {
+                            "chat_template_kwargs": {
+                                "thinking": False,
+                                "enable_thinking": False,
+                            },
+                        }
                     resp = self.client.chat.completions.create(**kwargs)
                     msg = resp.choices[0].message
                     content = msg.content or ""

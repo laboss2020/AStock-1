@@ -64,10 +64,13 @@ class Config:
     base_url: str = ""  # empty = preset default (or ASTOCK_BASE_URL)
     model: str = ""  # empty = preset default (or ASTOCK_MODEL)
     api_key: str = ""  # empty = read preset env vars
-    llm_timeout: int = 300  # seconds per request (NIM free tier queues can exceed 120s)
-    llm_max_retries: int = 3
-    llm_retry_delay: float = 5.0  # exponential backoff base: 5s → 10s → 20s
+    llm_timeout: int = 150  # seconds per request (关思考后正常调用 <20s；300 会让挂起
+                            # 连接等满 5 分钟才报错——run #42 重试周期 ~5min 致 4h 超时)
+    llm_max_retries: int = 2
+    llm_retry_delay: float = 5.0  # exponential backoff base: 5s → 10s
     llm_trust_env: bool = False  # False = bypass system proxy (direct); 1 = use it
+    llm_thinking: bool = False  # False = 请求关闭思考（仅 NIM 发送 chat_template_kwargs；
+                                # deepseek/nemotron 实测生效，GLM 忽略；其他 provider 不发）
 
     # --- Screening ---
     candidate_count: int = 30  # quant screen → top N candidates for LLM triage
@@ -156,6 +159,8 @@ def load_config(**overrides: Any) -> Config:
         "ASTOCK_OUTPUT_DIR": ("output_dir", str),
         "ASTOCK_LLM_TRUST_ENV": ("llm_trust_env", lambda v: v.strip() in ("1", "true", "yes", "True")),
         "ASTOCK_LLM_TIMEOUT": ("llm_timeout", int),
+        "ASTOCK_LLM_MAX_RETRIES": ("llm_max_retries", int),
+        "ASTOCK_LLM_THINKING": ("llm_thinking", lambda v: v.strip() in ("1", "true", "yes", "True")),
         "ASTOCK_REVIEW": ("review", lambda v: v.strip() in ("1", "true", "yes", "True")),
         "ASTOCK_STRATEGY_VERSION": ("strategy_version", int),
     }
