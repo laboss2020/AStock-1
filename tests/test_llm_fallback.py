@@ -183,6 +183,58 @@ def test_non_nim_no_thinking_param():
     print("  非 NIM provider 不发思考参数 OK")
 
 
+def test_github_models_preset():
+    """NIM 对 CI 黑洞的兜底通道：preset/base_url/模型/GITHUB_TOKEN 解析，
+    且不发 chat_template_kwargs（chat_template_kwargs 是 vLLM 专属）。"""
+    os.environ.pop("GITHUB_TOKEN", None)
+    os.environ.pop("GH_TOKEN", None)
+    saved_model = os.environ.pop("ASTOCK_MODEL", None)  # .env 里的 ASTOCK_MODEL 会盖掉 preset 默认
+    try:
+        cfg = load_config(provider="github_models")
+        assert cfg.resolved_base_url() == "https://models.github.ai/inference"
+        assert cfg.resolved_model() == "openai/gpt-4.1-mini"
+        assert cfg.resolved_api_key() == "", "no token env → empty key"
+        os.environ["GITHUB_TOKEN"] = "t0k"
+        assert load_config(provider="github_models").resolved_api_key() == "t0k"
+        llm = LLMClient(load_config(provider="github_models", api_key="k"))
+        api = _play(llm, [_ok("{}")])
+        llm.chat("sys", "user")
+        assert "extra_body" not in api.last_kwargs, "github_models must not send chat_template_kwargs"
+    finally:
+        os.environ.pop("GITHUB_TOKEN", None)
+        if saved_model is not None:
+            os.environ["ASTOCK_MODEL"] = saved_model
+    print("  github_models preset/不发思考参数 OK")
+
+
+def test_probe_emit_and_no_keys():
+    """probe_llm.py：GITHUB_OUTPUT 写出 + 双 key 全缺时 exit 1。"""
+    import importlib.util
+    import tempfile
+    spec = importlib.util.spec_from_file_location(
+        "probe_llm", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "probe_llm.py"))
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+
+    out = os.path.join(tempfile.mkdtemp(prefix="probe_test_"), "gh_out.txt")
+    os.environ["GITHUB_OUTPUT"] = out
+    try:
+        probe._emit("github_models", "m1", "m2")
+        content = open(out, encoding="utf-8").read()
+        assert "provider=github_models" in content and "model=m1" in content and "fallback=m2" in content
+    finally:
+        os.environ.pop("GITHUB_OUTPUT", None)
+
+    saved = {k: os.environ.pop(k, None) for k in ("NVIDIA_API_KEY", "NIM_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ASTOCK_MODEL")}
+    try:
+        assert probe.main() == 1, "no keys at all → exit 1"
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
+    print("  probe GITHUB_OUTPUT/无 key 退出 OK")
+
+
 def test_deep_pricing_list_wrapped():
     """glm-5.3-flash 把 JSON 对象包进数组——deep_analyze / pricing 不崩，
     取第一个 dict 元素（2026-10-23 CI 实测 003017 因此失败过）。"""
@@ -295,6 +347,8 @@ def main() -> int:
     test_nim_disables_thinking_by_default()
     test_thinking_env_override()
     test_non_nim_no_thinking_param()
+    test_github_models_preset()
+    test_probe_emit_and_no_keys()
     test_deep_pricing_list_wrapped()
     test_deep_empty_list_degrades()
     test_pipeline_skips_failing_deep()

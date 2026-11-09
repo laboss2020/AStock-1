@@ -39,8 +39,11 @@ python main.py
 |---|---|---|---|---|
 | A（默认） | nim | `https://integrate.api.nvidia.com/v1` | `deepseek-ai/deepseek-v4.1-flash` | [build.nvidia.com](https://build.nvidia.com) 免费申请 |
 | B | deepseek | `https://api.deepseek.com/v1` | `deepseek-chat` | platform.deepseek.com |
+| B' | github_models | `https://models.github.ai/inference` | `openai/gpt-4.1-mini` | GitHub PAT（Actions 里内置 GITHUB_TOKEN 免配置）|
 | C | openai | `https://api.openai.com/v1` | `gpt-4o-mini` | platform.openai.com |
 | D | openai_compatible | 自填 | 自填 | 任意 OpenAI 兼容服务 |
+
+CI 定时 run 会先探测 NIM（对 GitHub Actions runner 的请求 2026-10 下旬起黑洞），不通自动切 GitHub Models。
 
 ```bash
 python main.py -p deepseek -m deepseek-chat

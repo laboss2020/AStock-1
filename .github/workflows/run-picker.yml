@@ -43,6 +43,7 @@ concurrency:
 
 permissions:
   contents: read
+  models: read  # GitHub Models（NIM 不通时的兜底 LLM 通道，见 probe_llm.py）
 
 jobs:
   pick:
@@ -119,14 +120,33 @@ jobs:
           pip check
           python -c "import httpx, urllib3, openai; import astock.cli; import astock.review; print('依赖与导入 OK')"
 
+      # NIM 对 CI runner 的请求自 2026-10 下旬起黑洞（TCP 通但 150s+ 零字节
+      # 响应，同一 key 本地秒回）——跑 main.py 前先各发一次极小 chat 探测，
+      # NIM 不通自动切 GitHub Models（内置 GITHUB_TOKEN，零额外配置）。
+      # 两个都只试 2 次小请求（最坏 ~2.5 分钟），都不通快速失败，
+      # 不浪费后面 10 分钟的数据拉取；日志一眼分清端点层 vs 代码层故障。
+      - name: LLM 端点探测（NIM 不通自动切 GitHub Models）
+        if: steps.precheck.outputs.skip != 'true'
+        id: llmprobe
+        timeout-minutes: 6
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          ASTOCK_MODEL: ${{ secrets.ASTOCK_MODEL || 'z-ai/glm-5.3-flash' }}
+          PYTHONIOENCODING: utf-8
+        run: python probe_llm.py
+
       - name: 运行选股
         if: steps.precheck.outputs.skip != 'true'
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-          ASTOCK_PROVIDER: nim
-          # secret 优先（仓库 Settings → Secrets 配 ASTOCK_MODEL 可换模型）；
-          # 缺省用实测主力。模型 404（NIM 下架）时 llm.py 自动切备选链。
-          ASTOCK_MODEL: ${{ secrets.ASTOCK_MODEL || 'z-ai/glm-5.3-flash' }}
+          GITHUB_TOKEN: ${{ github.token }}
+          # 探测选定：provider/model/fallback 由 probe_llm.py 写出。
+          # NIM 通道 model 取 ASTOCK_MODEL secret（缺省 glm-5.3-flash），
+          # 模型 404（NIM 下架）时 llm.py 自动切内置备选链。
+          ASTOCK_PROVIDER: ${{ steps.llmprobe.outputs.provider || 'nim' }}
+          ASTOCK_MODEL: ${{ steps.llmprobe.outputs.model || 'z-ai/glm-5.3-flash' }}
+          ASTOCK_FALLBACK_MODELS: ${{ steps.llmprobe.outputs.fallback || '' }}
           PYTHONIOENCODING: utf-8
           PYTHONUNBUFFERED: "1"
         run: python main.py

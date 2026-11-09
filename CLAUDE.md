@@ -45,6 +45,7 @@ PYTHONIOENCODING=utf-8 PYTHONPATH=. .venv/Scripts/python tests/test_review.py
 ## 定时运行 / Docker
 
 - `.github/workflows/run-picker.yml`：**七 cron**（北京 06:37/08:37/10:37/12:37/13:07/13:37/14:07，首个为 `37 22 * * 0-4` 其余 `1-5` 同日档）+ **precheck「gate + 时间窗」**：当天已跑秒退；距北京 13:10 超 3h 跳过；不足 3h **睡到 13:10 开跑**（吸收调度延迟）；已过 13:10 立即跑——延迟 0~7h 都能在 ~14:00 前完成（job ~20 分钟）。背景：GitHub schedule 延迟不可预测（实测 +2.3h~+8h、整天丢弃；猜 cron 没用，2026-10-16 由"赌延迟"改为"睡到点"）。gate 按北京时间去重（`.run_gate` 走 cache，`TZ=Asia/Shanghai date +%F`——**读写都必须带 TZ**，06:37 触发在 UTC 前一天）；第一个成功 run 写 gate，当天后续触发秒退；手动 workflow_dispatch 忽略 gate 与时间窗强制跑；失败不写 gate 后续触发重试。concurrency 组 `stock-picker` 排队防并发双跑。**CI 缓存必须含 reports/**（复盘读上一次 run 的 picks.json——reports/ 在 .gitignore，不进缓存则 CI 每天都是"首次运行"、复盘永远跳过）。需 repo secret `NVIDIA_API_KEY`
+- **LLM 端点探测**（`probe_llm.py`，2026-11-09 加）：NIM 对 Actions runner 的请求自 2026-10 下旬起**黑洞**（TCP 通但 150s+ 零字节响应，同一 key 本地秒回；10-21 起 CI 无一次真实成功）——跑 main.py 前先各发 2 次极小 chat（NIM 30s×2 / GitHub Models 45s×2），NIM 不通自动切 **GitHub Models**（`models.github.ai/inference` + Actions 内置 GITHUB_TOKEN，workflow 已声明 `permissions: models: read`，模型 gpt-4.1-mini，fallback gpt-4o-mini）；两个都不通 exit 1 快速失败。选定结果写 `$GITHUB_OUTPUT`（provider/model/fallback）给「运行选股」步骤接 env。免费层限额紧（~50 req/day），限额打满时错误隔离让缺只股票跳过、报告照出；NIM 恢复后 probe 自动切回
 - `Dockerfile`（python:3.12-slim，`pip install .[web]`）+ `docker-compose.yml`（picker 跑批 / web UI 8501）+ `.dockerignore`
 - 无 `.env` 时纯环境变量可用（env_map）；workflow 的 ASTOCK_MODEL 用 `${{ secrets.ASTOCK_MODEL || 'z-ai/glm-5.3-flash' }}`（secret 优先）
 
