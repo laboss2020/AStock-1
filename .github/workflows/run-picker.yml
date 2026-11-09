@@ -43,7 +43,6 @@ concurrency:
 
 permissions:
   contents: read
-  models: read  # GitHub Models（NIM 不通时的兜底 LLM 通道，见 probe_llm.py）
 
 jobs:
   pick:
@@ -121,18 +120,21 @@ jobs:
           python -c "import httpx, urllib3, openai; import astock.cli; import astock.review; print('依赖与导入 OK')"
 
       # NIM 对 CI runner 的请求自 2026-10 下旬起黑洞（TCP 通但 150s+ 零字节
-      # 响应，同一 key 本地秒回）——跑 main.py 前先各发一次极小 chat 探测，
-      # NIM 不通自动切 GitHub Models（内置 GITHUB_TOKEN，零额外配置）。
-      # 两个都只试 2 次小请求（最坏 ~2.5 分钟），都不通快速失败，
-      # 不浪费后面 10 分钟的数据拉取；日志一眼分清端点层 vs 代码层故障。
-      - name: LLM 端点探测（NIM 不通自动切 GitHub Models）
+      # 响应，同一 key 本地秒回；GitHub Models 兜底也已 2026-07-30 下线）——
+      # 跑 main.py 前先各发 2 次极小 chat 探测：NIM → 不通切自定义 OpenAI
+      # 兼容兜底通道（repo secrets 配 ASTOCK_FALLBACK_BASE_URL / _KEY /
+      # _MODEL 三个值，注册任意 OpenAI 兼容平台即可，推荐 openrouter.ai，
+      # 国内手机号可用 bigmodel.cn）。都不通 exit 1 快速失败，不白拉数据。
+      - name: LLM 端点探测（NIM 不通自动切兜底通道）
         if: steps.precheck.outputs.skip != 'true'
         id: llmprobe
         timeout-minutes: 6
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-          GITHUB_TOKEN: ${{ github.token }}
           ASTOCK_MODEL: ${{ secrets.ASTOCK_MODEL || 'z-ai/glm-5.3-flash' }}
+          ASTOCK_FALLBACK_BASE_URL: ${{ secrets.ASTOCK_FALLBACK_BASE_URL }}
+          ASTOCK_FALLBACK_KEY: ${{ secrets.ASTOCK_FALLBACK_KEY }}
+          ASTOCK_FALLBACK_MODEL: ${{ secrets.ASTOCK_FALLBACK_MODEL }}
           PYTHONIOENCODING: utf-8
         run: python probe_llm.py
 
@@ -140,13 +142,14 @@ jobs:
         if: steps.precheck.outputs.skip != 'true'
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-          GITHUB_TOKEN: ${{ github.token }}
-          # 探测选定：provider/model/fallback 由 probe_llm.py 写出。
+          # 探测选定：provider/model/base_url 由 probe_llm.py 写出。
           # NIM 通道 model 取 ASTOCK_MODEL secret（缺省 glm-5.3-flash），
           # 模型 404（NIM 下架）时 llm.py 自动切内置备选链。
           ASTOCK_PROVIDER: ${{ steps.llmprobe.outputs.provider || 'nim' }}
           ASTOCK_MODEL: ${{ steps.llmprobe.outputs.model || 'z-ai/glm-5.3-flash' }}
           ASTOCK_FALLBACK_MODELS: ${{ steps.llmprobe.outputs.fallback || '' }}
+          ASTOCK_BASE_URL: ${{ steps.llmprobe.outputs.base_url || '' }}
+          OPENAI_COMPATIBLE_API_KEY: ${{ secrets.ASTOCK_FALLBACK_KEY }}
           PYTHONIOENCODING: utf-8
           PYTHONUNBUFFERED: "1"
         run: python main.py

@@ -40,15 +40,6 @@ LLM_PRESETS: dict[str, dict[str, Any]] = {
         "env_vars": ("DEEPSEEK_API_KEY",),
         "label": "DeepSeek",
     },
-    # GitHub Models：GitHub 自家的 OpenAI 兼容推理网关。Actions 里用内置
-    # GITHUB_TOKEN（workflow 需声明 permissions: models: read）零配置可调，
-    # 作为 NIM 对 CI 网络不通时的兜底通道（probe_llm.py 自动切换）。
-    "github_models": {
-        "base_url": "https://models.github.ai/inference",
-        "default_model": "openai/gpt-4.1-mini",
-        "env_vars": ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_MODELS_TOKEN"),
-        "label": "GitHub Models（Actions 内置 GITHUB_TOKEN）",
-    },
     "openai": {
         "base_url": "https://api.openai.com/v1",
         "default_model": "gpt-4o-mini",
