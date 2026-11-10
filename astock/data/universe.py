@@ -51,7 +51,7 @@ def fetch_universe(include_bse: bool = False) -> pd.DataFrame:
     cached = read_csv_cache("universe", f"universe_{pd.Timestamp.now():%Y%m%d}.csv",
                             dtype={"code": str})
     if cached is not None and not cached.empty:
-        return _recompute_listed_days(cached)
+        return _coerce_numeric(_recompute_listed_days(cached))
     try:
         df = _universe_eastmoney(include_bse)
         if df is not None and not df.empty:
@@ -67,7 +67,25 @@ def fetch_universe(include_bse: bool = False) -> pd.DataFrame:
             "无法获取全市场股票清单（东财 clist 与新浪 Market_Center 均无数据）。"
             "请检查网络，或稍后重试（节假日/非交易时段接口也可能返回空）。"
         )
-    write_csv_cache(df, "universe", f"universe_{pd.Timestamp.now():%Y%m%d}.csv")
+    write_csv_cache(_coerce_numeric(df), "universe", f"universe_{pd.Timestamp.now():%Y%m%d}.csv")
+    return df
+
+
+_NUMERIC_COLS = (
+    "price", "change_pct", "volume", "amount", "turnover_pct",
+    "pe", "volume_ratio", "high", "low", "mcap", "pb", "main_inflow",
+    "mcap_yi", "amount_yi", "main_inflow_yi",
+)
+
+
+def _coerce_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    """数值列统一 coerce。CSV 读回后 dtype 不可信：read_csv 按列推断，一个
+    非数值单元格（EM 缺失值 "-"）或 pandas 3 的字符串推断会把整列变 str，
+    下游 `1.0 <= vr`（scorer）与 f"{pe:.1f}"（提示词）全崩——run #130
+    Stage 2 动量打分 TypeError 实锤。首拉与缓存读回都走这里。"""
+    for col in _NUMERIC_COLS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
 
@@ -200,6 +218,6 @@ def _universe_eastmoney(include_bse: bool = False) -> pd.DataFrame:
     df["main_inflow_yi"] = pd.to_numeric(df["main_inflow"], errors="coerce") / 1e8
     # 上市日期（YYYYMMDD）→ 已上市日历日数（_recompute_listed_days；无法
     # 解析时给 -1 让过滤器决定怎么处理——解析失败不该静默把老票当次新）。
-    df = _recompute_listed_days(df)
+    df = _coerce_numeric(_recompute_listed_days(df))
     df["code"] = df["code"].astype(str)
     return df.reset_index(drop=True)
