@@ -51,7 +51,7 @@ def fetch_universe(include_bse: bool = False) -> pd.DataFrame:
     cached = read_csv_cache("universe", f"universe_{pd.Timestamp.now():%Y%m%d}.csv",
                             dtype={"code": str})
     if cached is not None and not cached.empty:
-        return cached
+        return _recompute_listed_days(cached)
     try:
         df = _universe_eastmoney(include_bse)
         if df is not None and not df.empty:
@@ -68,6 +68,19 @@ def fetch_universe(include_bse: bool = False) -> pd.DataFrame:
             "请检查网络，或稍后重试（节假日/非交易时段接口也可能返回空）。"
         )
     write_csv_cache(df, "universe", f"universe_{pd.Timestamp.now():%Y%m%d}.csv")
+    return df
+
+
+def _recompute_listed_days(df: pd.DataFrame) -> pd.DataFrame:
+    """listed_days 是派生列，公式修过 bug（run #128：旧式 YYYYMMDD 整数相减
+    当天数，老票只得 19-25 天 → 次新过滤全灭）——缓存 CSV 里的旧值不可信，
+    读回时一律从 listed_date 重算。无 listed_date 列（新浪路径）原样返回。"""
+    if "listed_date" not in df.columns:
+        return df
+    ld = pd.to_numeric(df["listed_date"], errors="coerce").astype("Int64")
+    ld = pd.to_datetime(ld, format="%Y%m%d", errors="coerce")
+    df["listed_days"] = (pd.Timestamp.now().normalize() - ld).dt.days
+    df["listed_days"] = df["listed_days"].fillna(-1).astype(int)
     return df
 
 
@@ -185,15 +198,8 @@ def _universe_eastmoney(include_bse: bool = False) -> pd.DataFrame:
     df["mcap_yi"] = pd.to_numeric(df["mcap"], errors="coerce") / 1e8
     df["amount_yi"] = df["amount"] / 1e8
     df["main_inflow_yi"] = pd.to_numeric(df["main_inflow"], errors="coerce") / 1e8
-    # 上市日期（YYYYMMDD）→ 已上市日历日数；无法解析时给 -1 让过滤器决定
-    # 怎么处理（解析失败不该静默把老票当次新）。
-    # ⚠ 历史 bug（2026-11-10 run #128 排查）：旧公式 (today_str - ld)*0.7/1e4
-    # 是 YYYYMMDD 整数相减不是天数——老票只得 ~19-25，`listed_days >= 60` 的
-    # 次新过滤把全市场杀到 0 只（首次 commit 就存在，被新浪 fallback 的
-    # listed_days=-1 全放行掩盖至今）。
-    ld = pd.to_numeric(df["listed_date"], errors="coerce")
-    ld = pd.to_datetime(ld, format="%Y%m%d", errors="coerce")
-    df["listed_days"] = (pd.Timestamp.now().normalize() - ld).dt.days
-    df["listed_days"] = df["listed_days"].fillna(-1).astype(int)
+    # 上市日期（YYYYMMDD）→ 已上市日历日数（_recompute_listed_days；无法
+    # 解析时给 -1 让过滤器决定怎么处理——解析失败不该静默把老票当次新）。
+    df = _recompute_listed_days(df)
     df["code"] = df["code"].astype(str)
     return df.reset_index(drop=True)
