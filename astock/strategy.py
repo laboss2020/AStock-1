@@ -32,11 +32,11 @@ _MULT_MIN, _MULT_MAX = 0.5, 2.0  # factor multiplier clamp
 
 @dataclass
 class StrategyVersion:
-    """One strategy version distilled from a review of the previous run."""
+    """One strategy version distilled from reviewing recent runs."""
     version: int
     created: str                      # YYYY-MM-DD
-    based_on: str                     # 上次 run 目录名（复盘对象）
-    review_summary: str = ""          # 复盘结论（上次选股实际表现、判断准确度）
+    based_on: str                     # 窗口内最新 run 目录名（复盘窗口的锚点）
+    review_summary: str = ""          # 复盘结论（近期选股实际表现、判断准确度）
     regime_calibration: str = ""      # Stage 1 大盘体检的校准提示
     triage_criteria: str = ""         # Stage 3 快筛评分标准的补充要求
     deep_focus: str = ""              # Stage 4 深度分析的补充关注点

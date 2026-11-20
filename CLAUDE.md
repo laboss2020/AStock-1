@@ -34,9 +34,9 @@ PYTHONIOENCODING=utf-8 PYTHONPATH=. .venv/Scripts/python tests/test_review.py
 
 ## 复盘与策略版本
 
-- 每次选股后自动复盘**上一次 run**（`review.py::run_review`）：读上次 picks.json → 腾讯批量拉当前表现（1 call）→ `_outcome` 逐只判定（已达目标/跌破止损/回落区间/缺失）→ 1 次 LLM 调用（schema 含 `stock_reviews` 逐只价格变化原因）→ `strategies/vN.json`（版本 = latest+1）
-- **复盘明细进报告**（report.py 复盘节）：前后对比表（当时收盘/现价/累计涨跌%（现价 vs anchors.close）/当时挂的价位/当前状态）+ 逐只"当时选股原因"（picks.json 的 buy_logic+催化剂）与"价格变化原因"（LLM stock_reviews）；明细挂 `StrategyVersion.review_rows`（内存传递，不写入版本文件）
-- **复盘调用在 save_report 之前**（cli.py）——本次 run 还没写盘，_latest_run 拿到的是上一次 run；复盘失败只记录不阻塞选股结果
+- 每次选股后自动复盘**窗口内全部 run**（`review.py::run_review`）：默认回看 14 个日历天（`cfg.review_window_days` / env `ASTOCK_REVIEW_WINDOW_DAYS`），`_window_runs` 收集窗口内所有含 picks.json 的报告目录（新→旧；目录名解析失败/无 picks 跳过，边界日全天在窗口内）→ 全部 codes 跨 run 去重后腾讯批量拉当前表现（1 call，`tencent_quotes` 内部分批 50/批）→ `_outcome` 逐只判定（已达目标/跌破止损/回落区间/缺失）→ 1 次 LLM 调用（user prompt 按 run 分组逐行 JSON，schema 的 `stock_reviews` 项含 `run_dir`；max_tokens 4500）→ `strategies/vN.json`（版本 = latest+1）。**无状态**：同股跨 run 重复出现是特性（不同时点的独立判断），不做"已收官"标记；rows 总数 >150 时按 run 均匀裁剪（防手动同日多跑撑爆 prompt）
+- **复盘明细进报告**（report.py 复盘节，**按 run 分组**）：汇总行（窗口天数/run 数/行数）→ 每个 run 小节（`#### run {name}（N 天前）`）下前后对比表（当时收盘/现价/累计涨跌%（现价 vs anchors.close）/当时挂的价位/当前状态）+ 逐只"当时选股原因"（picks.json 的 buy_logic+催化剂）与"价格变化原因"（LLM stock_reviews，按 (run_dir, code) 回填、裸 code 二级兜底）；明细行带 `run_dir`/`days_ago`，挂 `StrategyVersion.review_rows`（内存传递，不写入版本文件）
+- **复盘调用在 save_report 之前**（cli.py）——本次 run 还没写盘，复盘看到的是窗口内已有 run（天然不含本次）；复盘失败只记录不阻塞选股结果
 - 版本结构（`strategy.py::StrategyVersion`）：review_summary + 各阶段提示词校准（regime/triage/deep/pricing）+ 因子权重乘数（clamp 0.5-2.0，归一化 sum=1）+ notes
 - 下次运行默认加载最新版本（`cfg.strategy_version=0` 语义：0=最新/无则默认策略）；`--strategy-version N` / `ASTOCK_STRATEGY_VERSION=N` 钉住特定版本
 - pipeline 开头加载版本 → `sv.prompt_blocks()` 嵌入各阶段提示词（ASTOCK_RULES 之后）→ Stage 2 权重 `apply_multipliers` 叠加乘数
@@ -80,4 +80,4 @@ PYTHONIOENCODING=utf-8 PYTHONPATH=. .venv/Scripts/python tests/test_review.py
 - **run #42 4h 超时教训**（2026-10-23）：NIM 网关高峰单请求挂 4-5 分钟才报 Connection error，timeout=300 + 重试 3 次 → 一次失败烧 ~15 分钟，几只失败股票拖满 4h 被 GitHub 取消——现已 timeout 150/connect 10s/重试 2/关思考（失败代价 ~5 分钟）。另：deepseek-v4.1-flash **开思考时 content 为空**（reasoning 吃满但 finish=stop，不触发提额重试），关思考根治
 - 磁盘缓存读 CSV 时 Date 列是字符串——`read_csv_cache` 必须传 `parse_dates=["Date"]`；code 列必须 `dtype={"code": str}`（否则 000001 前导零丢失）
 - universe 是盘中快照：缓存按天（同日复用、隔天重拉），勿做跨天缓存
-- 复盘时序：run_review 在 save_report 前调用；测试里"用 vN"的断言出现在第 N+1 轮 run（版本在 pipeline 开头已定，当轮复盘生成的新版本下一轮才生效）
+- 复盘时序：run_review 在 save_report 前调用；测试里"用 vN"的断言出现在第 N+1 轮 run（版本在 pipeline 开头已定，当轮复盘生成的新版本下一轮才生效）；同日多 run 各自独立进窗口（窗口按目录名日期过滤，无去重）

@@ -89,7 +89,8 @@ class Config:
     debug: bool = False  # verbose logging
 
     # --- Review / strategy versioning ---
-    review: bool = True  # 复盘上一次 run 并生成新策略版本（每次选股之后）
+    review: bool = True  # 复盘近期 run 并生成新策略版本（每次选股之后）
+    review_window_days: int = 14  # 复盘回看窗口（日历天）：窗口内所有含 picks 的 run 都复盘
     strategy_version: int = 0  # 0 = 用最新策略版本（无则默认策略）；N = 指定版本
 
     def resolved_base_url(self) -> str:
@@ -162,6 +163,7 @@ def load_config(**overrides: Any) -> Config:
         "ASTOCK_LLM_MAX_RETRIES": ("llm_max_retries", int),
         "ASTOCK_LLM_THINKING": ("llm_thinking", lambda v: v.strip() in ("1", "true", "yes", "True")),
         "ASTOCK_REVIEW": ("review", lambda v: v.strip() in ("1", "true", "yes", "True")),
+        "ASTOCK_REVIEW_WINDOW_DAYS": ("review_window_days", int),
         "ASTOCK_STRATEGY_VERSION": ("strategy_version", int),
     }
     for var, (name, cast) in env_map.items():

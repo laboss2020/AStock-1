@@ -83,12 +83,17 @@ def main(
         try:
             sv_new = run_review(cfg, llm, cfg.output_dir)
             if sv_new:
+                rows = sv_new.review_rows  # 逐只明细：前后对比+选股/变化原因
+                run_dirs = list(dict.fromkeys(r.get("run_dir", "") for r in rows))
                 result.review = {
-                    "based_on": sv_new.based_on,
+                    "based_on": sv_new.based_on,       # 窗口内最新 run（兼容旧字段）
+                    "based_on_runs": run_dirs,          # 窗口内全部 run（新→旧）
+                    "window_days": getattr(cfg, "review_window_days", 14),
+                    "run_count": len(run_dirs),
                     "summary": sv_new.review_summary,
                     "new_version": sv_new.version,
                     "notes": sv_new.notes,
-                    "rows": sv_new.review_rows,  # 逐只明细：前后对比+选股/变化原因
+                    "rows": rows,
                 }
         except Exception as e:
             msg = f"复盘失败（不影响选股结果）: {e}"
@@ -139,13 +144,18 @@ def main(
     if result.review:
         rv = result.review
         console.print("\n[bold]四、复盘[/bold]")
-        console.print(f"  复盘对象: {rv.get('based_on', '—')}  新策略版本: [bold green]v{rv.get('new_version', '?')}[/bold green]（下次运行默认使用）")
+        runs = rv.get("based_on_runs") or []
+        console.print(
+            f"  复盘对象: 最近{rv.get('window_days', 14)}天 {len(runs)} 个 run"
+            f"（最新 {runs[0] if runs else rv.get('based_on', '—')}）"
+            f"共 {len(rv.get('rows') or [])} 只"
+            f"  新策略版本: [bold green]v{rv.get('new_version', '?')}[/bold green]（下次运行默认使用）")
         if rv.get("summary"):
             console.print(f"  结论: {rv['summary']}")
         for n in rv.get("notes", []):
             console.print(f"  - {n}")
     elif result.strategy_version_used == 0:
-        console.print("\n[bold]四、复盘[/bold]\n  首次运行（无上一次 run），未生成策略版本。")
+        console.print("\n[bold]四、复盘[/bold]\n  窗口内无历史 run（首次运行），未生成策略版本。")
 
     console.print(f"\n[bold]完整报告[/bold]: {run_dir / 'report.md'}")
     console.print("[yellow]⚠️ 以上内容由 AI 生成，仅供研究参考，不构成投资建议[/yellow]")

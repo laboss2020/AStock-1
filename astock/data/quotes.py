@@ -42,11 +42,19 @@ def em_secid(code: str) -> str:
 
 
 def tencent_quotes(codes: list[str]) -> dict[str, dict]:
-    """Batch realtime quotes from Tencent (GBK). Returns {code: fields}."""
+    """Batch realtime quotes from Tencent (GBK). Returns {code: fields}.
+
+    Split into chunks of ~50 codes per GET to keep the query string short
+    (one failed chunk loses only its own codes — the caller treats
+    missing entries as [数据缺失])."""
     if not codes:
         return {}
-    q = ",".join(f"{market_prefix(c)}{c}" for c in codes)
-    return parse_tencent_text(fetch_tencent_raw(q))
+    out: dict[str, dict] = {}
+    for i in range(0, len(codes), 50):
+        chunk = codes[i:i + 50]
+        q = ",".join(f"{market_prefix(c)}{c}" for c in chunk)
+        out.update(parse_tencent_text(fetch_tencent_raw(q)))
+    return out
 
 
 def fetch_tencent_raw(query: str) -> str:
